@@ -15,8 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Build & Run Reli (from source)
+      - name: Build & Run Reli
         run: |
-          swift build -c release
-          ./.build/release/reli-command --help
-          ./.build/release/reli-command --path . --no-ai --annotations github --max-findings 50 --out reli-report.md
+          brew tap 710csm/tap
+          brew install reli
+          reli --help
