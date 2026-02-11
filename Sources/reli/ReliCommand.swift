@@ -3,6 +3,31 @@ import ReliCore
 import ReliRules
 import ArgumentParser
 
+enum FailOn: String, ExpressibleByArgument {
+    case off
+    case low
+    case medium
+    case high
+
+    var threshold: Severity? {
+        switch self {
+        case .off:
+            return nil
+        case .low:
+            return .low
+        case .medium:
+            return .medium
+        case .high:
+            return .high
+        }
+    }
+}
+
+enum AnnotationsMode: String, ExpressibleByArgument {
+    case off
+    case github
+}
+
 @main
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
 struct ReliCommand: AsyncParsableCommand {
@@ -27,6 +52,18 @@ struct ReliCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4, gpt-3.5-turbo).")
     var model: String = "gpt-4o-mini"
+
+    @Option(
+        name: .customLong("fail-on"),
+        help: "Exit with code 1 if findings are at or above the given severity (off|low|medium|high)."
+    )
+    var failOn: FailOn = .off
+
+    @Option(
+        name: .customLong("annotations"),
+        help: "Emit CI annotations (off|github)."
+    )
+    var annotations: AnnotationsMode = .off
 
     func run() async throws {
         // Discover Swift files and build the lint context.
@@ -90,6 +127,17 @@ struct ReliCommand: AsyncParsableCommand {
             try output.write(to: url, atomically: true, encoding: .utf8)
         } else {
             print(output)
+        }
+
+        if annotations == .github {
+            GitHubAnnotationsEmitter(projectRoot: path).emit(findings: findings)
+        }
+
+        if let threshold = failOn.threshold {
+            let shouldFail = findings.contains { $0.severity >= threshold }
+            if shouldFail {
+                throw ExitCode.failure
+            }
         }
     }
 }
