@@ -2,231 +2,171 @@ import Foundation
 import ReliCore
 
 /// Flags types that are likely doing too much. This implementation uses a
-/// simple heuristic based on the number of lines and functions in a file. In
-/// the future this could leverage SwiftSyntax to analyse declarations and
-/// measure true complexity. The heuristic thresholds are deliberately set
-/// conservatively; adjust them to your team's conventions as needed.
+/// SwiftSyntax-backed heuristic based on the number of lines and functions in
+/// each type declaration. This reduces regex false positives and makes
+/// type-level findings actionable.
 public struct GodTypeRule: Rule {
     public let id = "god-type"
     public let description = "Detects overly large types (e.g. view controllers or view models)"
     
     private let lineThreshold: Int
     private let functionThreshold: Int
+    private let includeExtensions: Bool
 
     /// - Parameters:
-    ///   - lineThreshold: Triggers when a file exceeds this many lines.
-    ///   - functionThreshold: Triggers when a file exceeds this many `func` declarations.
+    ///   - lineThreshold: Triggers when a type exceeds this many lines.
+    ///   - functionThreshold: Triggers when a type exceeds this many function declarations.
+    ///   - includeExtensions: Whether same-file extensions should be merged into type metrics.
     ///
-    /// Defaults are intentionally set to be a bit more sensitive so that most real-world
-    /// codebases will surface a small number of actionable findings.
-    public init(lineThreshold: Int = 300, functionThreshold: Int = 20) {
+    /// Defaults are intentionally set to be a bit more sensitive so that most
+    /// real-world codebases surface a manageable set of actionable findings.
+    public init(lineThreshold: Int = 300, functionThreshold: Int = 20, includeExtensions: Bool = false) {
         self.lineThreshold = lineThreshold
         self.functionThreshold = functionThreshold
+        self.includeExtensions = includeExtensions
     }
 
     public func check(_ context: LintContext) throws -> [Finding] {
+        let analyzer = TypeAnalyzer()
+        let metrics = includeExtensions
+            ? aggregatedTypeMetrics(context: context, analyzer: analyzer)
+            : perFileTypeMetrics(context: context, analyzer: analyzer)
+
         var findings: [Finding] = []
-        for (path, text) in context.fileContents {
-            guard path.hasSuffix(".swift") else { continue }
-            let analysis = analyze(text: text)
-            let lineCount = analysis.lineCount
-            let funcCount = analysis.functions.count
-            // Trigger a finding if either threshold is exceeded. Lower thresholds produce more
-            // suggestions; you may wish to tune these depending on your codebase size.
-            if lineCount >= lineThreshold || funcCount >= functionThreshold {
-                let severity: Severity = (lineCount >= max(lineThreshold * 2, 600) || funcCount >= max(functionThreshold * 2, 40)) ? .high : .medium
-                let issueLine = issueLineNumber(lineCount: lineCount, functions: analysis.functions)
-                let snippet = SnippetBuilder.around(text: text, line: issueLine)
-                let confidence = countingConfidence(analysis: analysis)
-                let topFunctions = analysis.functions
-                    .sorted { lhs, rhs in
-                        if lhs.lineSpan == rhs.lineSpan { return lhs.startLine < rhs.startLine }
-                        return lhs.lineSpan > rhs.lineSpan
-                    }
-                    .prefix(10)
-                    .map { "\($0.name)(\($0.lineSpan)L)" }
-                    .joined(separator: ", ")
-                let avgFunctionLines: String = {
-                    guard !analysis.functions.isEmpty else { return "0.0" }
-                    let total = analysis.functions.reduce(0) { $0 + $1.lineSpan }
-                    return String(format: "%.1f", Double(total) / Double(analysis.functions.count))
-                }()
-                let maxFunctionLines = analysis.functions.map(\.lineSpan).max() ?? 0
-                let focusedTypeNames = analysis.typeNames.filter {
-                    $0.hasSuffix("ViewController") || $0.hasSuffix("VC") || $0.hasSuffix("ViewModel") || $0.hasSuffix("VM")
+        for metric in metrics {
+            let lineCount = metric.lineCount
+            let funcCount = metric.functions.count
+            guard lineCount >= lineThreshold || funcCount >= functionThreshold else { continue }
+
+            let severity: Severity = (lineCount >= max(lineThreshold * 2, 600) || funcCount >= max(functionThreshold * 2, 40)) ? .high : .medium
+            let snippet = SnippetBuilder.around(text: metric.sourceText, line: metric.startLine)
+            let topFunctions = metric.functions
+                .sorted { lhs, rhs in
+                    if lhs.lineSpan == rhs.lineSpan { return lhs.startLine < rhs.startLine }
+                    return lhs.lineSpan > rhs.lineSpan
                 }
-                let chosenTypeName = (focusedTypeNames.isEmpty ? analysis.typeNames : focusedTypeNames).first
-                let prefixGroups = groupedFunctionPrefixes(from: analysis.functions)
-                    .prefix(8)
-                    .map { "\($0.prefix): \($0.count)" }
-                    .joined(separator: ", ")
-                let markSections = analysis.markSections.prefix(8).joined(separator: ", ")
-                var message = "This file appears large (\(lineCount) lines, \(funcCount) functions by regex counting). Consider splitting responsibilities into smaller types."
-                if let chosenTypeName {
-                    message = "Type `\(chosenTypeName)` appears large (\(lineCount) lines, \(funcCount) functions by regex counting). Consider splitting responsibilities by feature boundaries."
-                }
-                message += " Counting method: regex (v0.1), confidence: \(confidence)."
-                let finding = Finding(
+                .prefix(10)
+                .map { "\($0.name)(\($0.lineSpan)L)" }
+                .joined(separator: ", ")
+            let avgFunctionLines = averageFunctionLines(metric.functions)
+            let maxFunctionLines = metric.functions.map(\.lineSpan).max() ?? 0
+            let prefixGroups = groupedFunctionPrefixes(from: metric.functions)
+                .prefix(8)
+                .map { "\($0.prefix): \($0.count)" }
+                .joined(separator: ", ")
+            let markSections = metric.markSections.prefix(8).joined(separator: ", ")
+            let message = "\(metric.kind.capitalized) `\(metric.name)` appears large (\(lineCount) lines, \(funcCount) functions by SwiftSyntax counting). Consider splitting responsibilities by feature boundaries. Counting method: swift-syntax (v0.2), confidence: high."
+
+            findings.append(
+                Finding(
                     ruleID: id,
                     title: "Massive type suspected",
                     message: message,
                     severity: severity,
-                    filePath: path,
-                    line: issueLine,
+                    filePath: metric.filePath,
+                    line: metric.startLine,
                     column: nil,
-                    typeName: chosenTypeName,
+                    typeName: metric.name,
                     evidence: [
                         "lineCount": "\(lineCount)",
                         "funcCount": "\(funcCount)",
                         "lineThreshold": "\(lineThreshold)",
                         "functionThreshold": "\(functionThreshold)",
-                        "typeName": chosenTypeName ?? "",
+                        "typeName": metric.name,
+                        "typeKind": metric.kind,
                         "topFunctionNames": topFunctions,
                         "avgFunctionLines": avgFunctionLines,
                         "maxFunctionLines": "\(maxFunctionLines)",
-                        "extensionCount": "\(analysis.extensionCount)",
-                        "uiActionCount": "\(analysis.uiActionCount)",
+                        "extensionCount": "\(metric.extensionCount)",
+                        "includeExtensions": "\(includeExtensions)",
+                        "uiActionCount": "\(metric.uiActionCount)",
                         "functionPrefixGroups": prefixGroups.isEmpty ? "none" : prefixGroups,
                         "markSections": markSections.isEmpty ? "none" : markSections,
-                        "countingMethod": "regex (v0.1)",
-                        "countingConfidence": confidence
+                        "countingMethod": "swift-syntax (v0.2)",
+                        "countingConfidence": "high"
                     ],
                     snippet: snippet
                 )
-                findings.append(finding)
-            }
+            )
         }
         return findings
     }
 
-    private func issueLineNumber(lineCount: Int, functions: [FunctionMetric]) -> Int {
-        if lineCount >= lineThreshold {
-            return min(lineThreshold, lineCount)
-        }
-
-        if functions.count >= functionThreshold {
-            return functions[functionThreshold - 1].startLine
-        }
-        return min(max(1, lineCount / 2), max(1, lineCount))
-    }
-
-    private func analyze(text: String) -> FileAnalysis {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let lineCount = lines.count
-        let functionPattern = try! NSRegularExpression(
-            pattern: "(?m)^\\s*(?:public|private|internal|fileprivate|open)?\\s*(?:static|class)?\\s*func\\s+([A-Za-z_][A-Za-z0-9_]*)",
-            options: []
-        )
-        let typePattern = try! NSRegularExpression(
-            pattern: "(?m)^\\s*(?:final\\s+)?(?:public|private|internal|fileprivate|open)?\\s*(?:class|struct|actor)\\s+([A-Z][A-Za-z0-9_]*)",
-            options: []
-        )
-        let extensionPattern = try! NSRegularExpression(
-            pattern: "(?m)^\\s*extension\\s+[A-Z][A-Za-z0-9_]*",
-            options: []
-        )
-        let uiActionPattern = try! NSRegularExpression(
-            pattern: "@IBAction\\b|\\.addTarget\\s*\\(",
-            options: []
-        )
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-
-        let functionMatches = functionPattern.matches(in: text, options: [], range: range)
-        let functions: [FunctionMetric] = functionMatches.enumerated().compactMap { idx, match in
-            guard let nameRange = Range(match.range(at: 1), in: text) else { return nil }
-            let name = String(text[nameRange])
-            let startLine = SnippetBuilder.lineNumber(in: text, utf16Offset: match.range.location)
-            let nextLocation = idx + 1 < functionMatches.count ? functionMatches[idx + 1].range.location : nil
-            let endLine = estimatedFunctionEndLine(
-                text: text,
-                declarationLocation: match.range.location,
-                nextDeclarationLocation: nextLocation
-            )
-            let hasBody = endLine > startLine
-            return FunctionMetric(name: name, startLine: startLine, endLine: endLine, hasBody: hasBody)
-        }
-
-        var typeNames: [String] = []
-        for match in typePattern.matches(in: text, options: [], range: range) {
-            guard let nameRange = Range(match.range(at: 1), in: text) else { continue }
-            let name = String(text[nameRange])
-            if !typeNames.contains(name) {
-                typeNames.append(name)
+    private func perFileTypeMetrics(context: LintContext, analyzer: TypeAnalyzer) -> [AnalyzedTypeMetric] {
+        var output: [AnalyzedTypeMetric] = []
+        for (path, text) in context.fileContents {
+            guard path.hasSuffix(".swift") else { continue }
+            let types = analyzer.analyze(filePath: path, source: text, includeExtensions: includeExtensions)
+            for type in types {
+                output.append(
+                    AnalyzedTypeMetric(
+                        name: type.name,
+                        kind: type.kind,
+                        filePath: path,
+                        sourceText: text,
+                        startLine: type.startLine,
+                        lineCount: type.lineCount,
+                        functions: type.functions,
+                        extensionCount: type.extensionCount,
+                        uiActionCount: type.uiActionCount,
+                        markSections: type.markSections
+                    )
+                )
             }
         }
-
-        let extensionCount = extensionPattern.numberOfMatches(in: text, options: [], range: range)
-        let uiActionCount = uiActionPattern.numberOfMatches(in: text, options: [], range: range)
-        let bodyFunctionCount = functions.filter(\.hasBody).count
-        let markSections = lines.compactMap { line -> String? in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("// MARK:") else { return nil }
-            return trimmed.replacingOccurrences(of: "// MARK:", with: "").trimmingCharacters(in: .whitespaces)
-        }
-        return FileAnalysis(
-            lineCount: lineCount,
-            functions: functions,
-            typeNames: typeNames,
-            extensionCount: extensionCount,
-            uiActionCount: uiActionCount,
-            bodyFunctionCount: bodyFunctionCount,
-            markSections: markSections
-        )
+        return output
     }
 
-    private func estimatedFunctionEndLine(
-        text: String,
-        declarationLocation: Int,
-        nextDeclarationLocation: Int?
-    ) -> Int {
-        let bytes = Array(text.utf16)
-        if bytes.isEmpty {
-            return 1
-        }
-        let start = min(max(declarationLocation, 0), bytes.count - 1)
-        let limit = min(nextDeclarationLocation ?? bytes.count, bytes.count)
-        if start >= limit {
-            return SnippetBuilder.lineNumber(in: text, utf16Offset: start)
-        }
+    private func aggregatedTypeMetrics(context: LintContext, analyzer: TypeAnalyzer) -> [AnalyzedTypeMetric] {
+        var order: [String] = []
+        var merged: [String: AnalyzedTypeMetric] = [:]
 
-        var index = start
-        var sawOpeningBrace = false
-        var braceDepth = 0
-        var lookaheadLines = 0
-        var lastNewlineIndex = start
-
-        while index < limit {
-            let scalar = bytes[index]
-            if scalar == 10 {
-                lookaheadLines += 1
-                lastNewlineIndex = index
-            }
-            if scalar == 123 {
-                sawOpeningBrace = true
-                braceDepth += 1
-            } else if scalar == 125, sawOpeningBrace {
-                braceDepth -= 1
-                if braceDepth == 0 {
-                    return SnippetBuilder.lineNumber(in: text, utf16Offset: index)
+        for (path, text) in context.fileContents {
+            guard path.hasSuffix(".swift") else { continue }
+            let types = analyzer.analyze(filePath: path, source: text, includeExtensions: true)
+            for type in types {
+                let key = type.name
+                if var existing = merged[key] {
+                    existing.lineCount += type.lineCount
+                    existing.functions.append(contentsOf: type.functions)
+                    existing.extensionCount += type.extensionCount
+                    existing.uiActionCount += type.uiActionCount
+                    existing.markSections.append(contentsOf: type.markSections)
+                    if existing.kind == "extension", type.kind != "extension" {
+                        existing.kind = type.kind
+                        existing.filePath = path
+                        existing.sourceText = text
+                        existing.startLine = type.startLine
+                    }
+                    merged[key] = existing
+                } else {
+                    order.append(key)
+                    merged[key] = AnalyzedTypeMetric(
+                        name: type.name,
+                        kind: type.kind,
+                        filePath: path,
+                        sourceText: text,
+                        startLine: type.startLine,
+                        lineCount: type.lineCount,
+                        functions: type.functions,
+                        extensionCount: type.extensionCount,
+                        uiActionCount: type.uiActionCount,
+                        markSections: type.markSections
+                    )
                 }
             }
-            if !sawOpeningBrace && lookaheadLines >= 6 {
-                return SnippetBuilder.lineNumber(in: text, utf16Offset: lastNewlineIndex)
-            }
-            index += 1
         }
-        return SnippetBuilder.lineNumber(in: text, utf16Offset: max(start, limit - 1))
+
+        return order.compactMap { merged[$0] }
     }
 
-    private func countingConfidence(analysis: FileAnalysis) -> String {
-        guard !analysis.functions.isEmpty else { return "low" }
-        let bodyRatio = Double(analysis.bodyFunctionCount) / Double(analysis.functions.count)
-        if bodyRatio < 0.6 { return "low" }
-        if bodyRatio < 0.85 { return "medium" }
-        return "high"
+    private func averageFunctionLines(_ functions: [TypeFunctionMetric]) -> String {
+        guard !functions.isEmpty else { return "0.0" }
+        let total = functions.reduce(0) { $0 + $1.lineSpan }
+        return String(format: "%.1f", Double(total) / Double(functions.count))
     }
 
-    private func groupedFunctionPrefixes(from functions: [FunctionMetric]) -> [(prefix: String, count: Int)] {
+    private func groupedFunctionPrefixes(from functions: [TypeFunctionMetric]) -> [(prefix: String, count: Int)] {
         let interestingPrefixes = ["setup", "bind", "fetch", "handle", "validate", "load", "make", "build"]
         var counts: [String: Int] = [:]
         for function in functions {
@@ -241,24 +181,16 @@ public struct GodTypeRule: Rule {
         }
     }
 
-    private struct FunctionMetric {
+    private struct AnalyzedTypeMetric {
         let name: String
-        let startLine: Int
-        let endLine: Int
-        let hasBody: Bool
-
-        var lineSpan: Int {
-            max(1, endLine - startLine + 1)
-        }
-    }
-
-    private struct FileAnalysis {
-        let lineCount: Int
-        let functions: [FunctionMetric]
-        let typeNames: [String]
-        let extensionCount: Int
-        let uiActionCount: Int
-        let bodyFunctionCount: Int
-        let markSections: [String]
+        var kind: String
+        var filePath: String
+        var sourceText: String
+        var startLine: Int
+        var lineCount: Int
+        var functions: [TypeFunctionMetric]
+        var extensionCount: Int
+        var uiActionCount: Int
+        var markSections: [String]
     }
 }
