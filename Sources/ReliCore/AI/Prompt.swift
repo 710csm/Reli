@@ -25,6 +25,7 @@ public struct Prompt {
             lines.append("  severity: \(finding.severity.rawValue)")
             let lineSuffix = finding.line.map { ":\($0)" } ?? ""
             lines.append("  file: \(finding.filePath)\(lineSuffix)")
+            lines.append("  typeName: \(finding.typeName ?? "null")")
             lines.append("  message: \(finding.message)")
             lines.append("  evidence: \(finding.evidence)")
             if let snippet = finding.snippet {
@@ -51,6 +52,60 @@ Requirements:
 
 Findings:
 \(compact)
+"""
+    }
+
+    /// Constructs an iOS-focused prompt for a single finding so the response
+    /// can be rendered inline next to the machine-detected evidence.
+    public static func explainFinding(
+        finding: Finding,
+        projectName: String,
+        findingNumber: Int,
+        totalFindings: Int
+    ) -> String {
+        let lineSuffix = finding.line.map { ":\($0)" } ?? ""
+        var snippetBlock = "null"
+        if let snippet = finding.snippet, !snippet.isEmpty {
+            snippetBlock = snippet
+        }
+
+        return """
+You are a senior iOS engineer reviewing finding \(findingNumber) of \(totalFindings) in project \(projectName).
+Write concise, practical advice in Markdown with exactly these sections:
+### Root Cause
+### Recommended Split Boundaries
+### Refactoring Steps
+### Risk & Verification Checklist
+
+Architecture priority rules:
+- If this looks like a UIKit UIViewController context, prioritize Coordinator + ViewModel + UseCase boundaries.
+- If this looks like a SwiftUI View context, prioritize ViewModel + Reducer boundaries.
+- If this looks like utility/helper logic, prioritize extension extraction first before introducing new layers.
+- For navigation-heavy screen logic, prefer Router/NavigationHandler; for list screens, consider SectionBuilder/DataSource split.
+- For network/business logic, prefer Service/Client/Interactor split.
+
+Keep recommendations specific to the finding evidence and avoid generic textbook advice.
+Propose 1-3 concrete steps with extraction boundaries named from existing symbols when possible.
+For Recommended Split Boundaries, propose grouping candidates using:
+- function name prefixes such as setup*/bind*/fetch*/handle*/validate*
+- existing // MARK: sections when available
+
+For Risk & Verification Checklist, include concrete iOS checks (adapt to relevance):
+- memory leak check on enter/exit using Instruments Leaks
+- navigation path stability (repeated push/pop or present/dismiss)
+- async cancellation on teardown (deinit and task cancellation path)
+- main-thread UI access verification (@MainActor/DispatchQueue.main)
+
+Finding:
+- ruleID: \(finding.ruleID)
+- title: \(finding.title)
+- severity: \(finding.severity.rawValue)
+- file: \(finding.filePath)\(lineSuffix)
+- typeName: \(finding.typeName ?? "null")
+- message: \(finding.message)
+- evidence: \(finding.evidence)
+- snippet:
+\(snippetBlock)
 """
     }
 }

@@ -15,7 +15,7 @@ public struct OpenAIProvider: AIClient {
     /// - Parameters:
     ///   - apiKey: your OpenAI API key
     ///   - model: the model identifier to use
-    public init(apiKey: String = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "", model: String = "gpt-4") {
+    public init(apiKey: String = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "", model: String = "gpt-4o-mini") {
         self.apiKey = apiKey
         self.model = model
     }
