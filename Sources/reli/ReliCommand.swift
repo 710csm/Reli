@@ -3,6 +3,31 @@ import ReliCore
 import ReliRules
 import ArgumentParser
 
+enum FailOn: String, ExpressibleByArgument {
+    case off
+    case low
+    case medium
+    case high
+
+    var threshold: Severity? {
+        switch self {
+        case .off:
+            return nil
+        case .low:
+            return .low
+        case .medium:
+            return .medium
+        case .high:
+            return .high
+        }
+    }
+}
+
+enum AnnotationsMode: String, ExpressibleByArgument {
+    case off
+    case github
+}
+
 @main
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
 struct ReliCommand: AsyncParsableCommand {
@@ -25,40 +50,78 @@ struct ReliCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Write output to the specified file instead of stdout.")
     var out: String?
 
-    @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4, gpt-3.5-turbo).")
+    @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4o-mini, gpt-4.1-mini).")
     var model: String = "gpt-4o-mini"
 
+    @Option(
+        name: .customLong("fail-on"),
+        help: "Exit with code 1 if findings are at or above the given severity (off|low|medium|high)."
+    )
+    var failOn: FailOn = .off
+
+    @Option(
+        name: .customLong("annotations"),
+        help: "Emit CI annotations (off|github)."
+    )
+    var annotations: AnnotationsMode = .off
+
+    @Option(
+        name: .customLong("include-extensions"),
+        help: "Include same-file extensions in type-level analysis (true|false)."
+    )
+    var includeExtensions: Bool = false
+
+    @Option(
+        name: .customLong("max-findings"),
+        help: "Limit report/annotation output to the top N findings."
+    )
+    var maxFindings: Int?
+
     func run() async throws {
+        if let maxFindings, maxFindings < 1 {
+            throw ValidationError("--max-findings must be a positive integer.")
+        }
+
+        // Normalize the root path so report paths + annotations are stable.
+        let rootURL = URL(fileURLWithPath: path).standardizedFileURL
+        let rootPath = rootURL.path
+
         // Discover Swift files and build the lint context.
         let walker = FileWalker()
         let context: LintContext
         do {
-            context = try walker.walk(root: path)
+            context = try walker.walk(root: rootPath)
         } catch {
             throw ValidationError("Failed to walk directory: \(error.localizedDescription)")
         }
         // Build rule list.
         var selectedRules: [Rule] = []
         let allRules: [Rule] = [
-            GodTypeRule(),
+            GodTypeRule(includeExtensions: includeExtensions),
             DependencyInjectionSmellRule(),
             AsyncLifecycleRule()
         ]
         if let rulesCSV = rules {
             let ids = Set(rulesCSV.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
             selectedRules = allRules.filter { ids.contains($0.id) }
+            if selectedRules.isEmpty {
+                throw ValidationError("No matching rules for --rules=\(rulesCSV). Available: \(allRules.map(\.id).joined(separator: ", "))")
+            }
         } else {
             selectedRules = allRules
         }
         // Run linter.
         let linter = Linter(rules: selectedRules)
         let findings = try linter.run(context: context)
+        let prioritizedFindings = prioritize(findings)
+        let reportFindings = applyMaxFindings(to: prioritizedFindings)
+        let omittedFindingsCount = max(0, prioritizedFindings.count - reportFindings.count)
         // Build report.
         var output: String
         switch format.lowercased() {
         case "json":
             let reporter = JSONReporter()
-            output = try reporter.report(findings: findings)
+            output = try reporter.report(findings: reportFindings)
         default:
             // Markdown with or without inline AI explanations.
             let reporter = MarkdownReporter()
@@ -66,13 +129,13 @@ struct ReliCommand: AsyncParsableCommand {
             if !noAI {
                 // Build iOS-focused prompts per finding and render responses inline.
                 let provider = OpenAIProvider(model: model)
-                let projectName = URL(fileURLWithPath: path).lastPathComponent
-                for (index, finding) in findings.enumerated() {
+                let projectName = rootURL.lastPathComponent
+                for (index, finding) in reportFindings.enumerated() {
                     let prompt = Prompt.explainFinding(
                         finding: finding,
                         projectName: projectName,
                         findingNumber: index + 1,
-                        totalFindings: findings.count
+                        totalFindings: reportFindings.count
                     )
                     do {
                         let aiReport = try await provider.generateMarkdown(prompt: prompt)
@@ -82,7 +145,15 @@ struct ReliCommand: AsyncParsableCommand {
                     }
                 }
             }
-            output = reporter.report(findings: findings, swiftFileCount: context.swiftFiles.count, inlineAI: inlineAI)
+            output = reporter.report(
+                findings: reportFindings,
+                swiftFileCount: context.swiftFiles.count,
+                inlineAI: inlineAI,
+                totalFindings: prioritizedFindings.count
+            )
+            if omittedFindingsCount > 0 {
+                output += "\n\n_Note: Showing top \(reportFindings.count) of \(prioritizedFindings.count) findings (`--max-findings \(reportFindings.count)`)._"
+            }
         }
         // Write or print output.
         if let outFile = out {
@@ -90,6 +161,33 @@ struct ReliCommand: AsyncParsableCommand {
             try output.write(to: url, atomically: true, encoding: .utf8)
         } else {
             print(output)
+        }
+
+        if annotations == .github {
+            GitHubAnnotationsEmitter(projectRoot: rootPath).emit(findings: reportFindings)
+        }
+
+        if let threshold = failOn.threshold {
+            let shouldFail = findings.contains { $0.severity >= threshold }
+            if shouldFail {
+                throw ExitCode.failure
+            }
+        }
+    }
+
+    private func applyMaxFindings(to findings: [Finding]) -> [Finding] {
+        guard let maxFindings else { return findings }
+        return Array(findings.prefix(maxFindings))
+    }
+
+    private func prioritize(_ findings: [Finding]) -> [Finding] {
+        findings.sorted { lhs, rhs in
+            if lhs.severity != rhs.severity { return lhs.severity > rhs.severity }
+            if lhs.filePath != rhs.filePath { return lhs.filePath < rhs.filePath }
+            let lhsLine = lhs.line ?? Int.max
+            let rhsLine = rhs.line ?? Int.max
+            if lhsLine != rhsLine { return lhsLine < rhsLine }
+            return lhs.title < rhs.title
         }
     }
 }

@@ -24,7 +24,8 @@ public struct MarkdownReporter {
     public func report(
         findings: [Finding],
         swiftFileCount: Int?,
-        inlineAI: [Int: String]
+        inlineAI: [Int: String],
+        totalFindings: Int? = nil
     ) -> String {
         // Group findings by severity.
         let indexedFindings = Array(findings.enumerated())
@@ -34,7 +35,7 @@ public struct MarkdownReporter {
         var lines: [String] = []
         lines.append("## AIRefactorLint Report")
         lines.append("")
-        lines.append(contentsOf: summaryLines(findings: findings, swiftFileCount: swiftFileCount))
+        lines.append(contentsOf: summaryLines(findings: findings, swiftFileCount: swiftFileCount, totalFindings: totalFindings))
         lines.append("")
         if findings.isEmpty {
             lines.append("_No issues detected by enabled rules._")
@@ -79,17 +80,18 @@ public struct MarkdownReporter {
         return lines.joined(separator: "\n")
     }
 
-    private func summaryLines(findings: [Finding], swiftFileCount: Int?) -> [String] {
+    private func summaryLines(findings: [Finding], swiftFileCount: Int?, totalFindings: Int?) -> [String] {
         let high = findings.filter { $0.severity == .high }.count
         let medium = findings.filter { $0.severity == .medium }.count
         let low = findings.filter { $0.severity == .low }.count
         let info = findings.filter { $0.severity == .info }.count
         let rules = Array(Set(findings.map(\.ruleID))).sorted().joined(separator: ", ")
+        let total = totalFindings ?? findings.count
 
         return [
             "- Summary: machine-generated findings overview",
             "- Swift files scanned: \(swiftFileCount.map(String.init) ?? "n/a")",
-            "- Total findings: \(findings.count)",
+            "- Total findings: \(total)",
             "- Severity breakdown: high \(high), medium \(medium), low \(low), info \(info)",
             "- Rules triggered: \(rules.isEmpty ? "none" : rules)"
         ]

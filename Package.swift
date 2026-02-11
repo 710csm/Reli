@@ -29,7 +29,9 @@ let package = Package(
     dependencies: [
         // Use Swift Argument Parser for the CLI implementation. You can bump
         // this version if a newer release of ArgumentParser is preferred.
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.3")
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.3"),
+        // SwiftSyntax-based parsing for AST-backed type/function analysis.
+        .package(url: "https://github.com/apple/swift-syntax.git", from: "601.0.1")
     ],
     targets: [
         // Core library target. No external dependencies beyond the standard
@@ -37,7 +39,11 @@ let package = Package(
         // integration scaffolding.
         .target(
             name: "ReliCore",
-            dependencies: []
+            dependencies: [
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxBuilder", package: "swift-syntax")
+            ]
         ),
         // The rules target depends on the core library. Each rule lives in its
         // own file so that they can be extended or replaced easily. Additional
@@ -64,4 +70,3 @@ let package = Package(
         ),
     ]
 )
-

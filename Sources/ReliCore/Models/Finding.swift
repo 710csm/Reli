@@ -3,11 +3,26 @@ import Foundation
 /// Describes the severity of a lint finding. Higher severities indicate more
 /// urgent problems. These values are used to group findings and to drive
 /// reporting. Additional severities may be added in the future.
-public enum Severity: String, Codable, Sendable {
+public enum Severity: String, Codable, Sendable, CaseIterable {
     case info
     case low
     case medium
     case high
+}
+
+extension Severity: Comparable {
+    public static func < (lhs: Severity, rhs: Severity) -> Bool {
+        rank(of: lhs) < rank(of: rhs)
+    }
+
+    private static func rank(of severity: Severity) -> Int {
+        switch severity {
+        case .info: return 0
+        case .low: return 1
+        case .medium: return 2
+        case .high: return 3
+        }
+    }
 }
 
 /// Represents a single issue detected by one of the lint rules. Findings are
