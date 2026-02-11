@@ -16,35 +16,92 @@ public struct MarkdownReporter {
     /// - Parameter findings: The findings to summarise.
     /// - Returns: A Markdown document detailing the issues.
     public func report(findings: [Finding]) -> String {
+        report(findings: findings, swiftFileCount: nil, inlineAI: [:])
+    }
+
+    /// Produces a Markdown report with a compact machine summary and optional
+    /// per-finding inline AI explanations.
+    public func report(
+        findings: [Finding],
+        swiftFileCount: Int?,
+        inlineAI: [Int: String]
+    ) -> String {
         // Group findings by severity.
-        let grouped = Dictionary(grouping: findings) { $0.severity }
+        let indexedFindings = Array(findings.enumerated())
+        let grouped = Dictionary(grouping: indexedFindings) { $0.element.severity }
         // Sort severities high to low.
         let severities: [Severity] = [.high, .medium, .low, .info]
         var lines: [String] = []
         lines.append("## AIRefactorLint Report")
+        lines.append("")
+        lines.append(contentsOf: summaryLines(findings: findings, swiftFileCount: swiftFileCount))
         lines.append("")
         if findings.isEmpty {
             lines.append("_No issues detected by enabled rules._")
             lines.append("")
             return lines.joined(separator: "\n")
         }
+        var findingNumber = 0
         for severity in severities {
             guard let group = grouped[severity], !group.isEmpty else { continue }
-            lines.append("### \(severity.rawValue.capitalized) Issues")
+            lines.append("### \(severity.rawValue.capitalized)")
             lines.append("")
-            for finding in group {
-                var line = "- **\(finding.title)** in `\(finding.filePath)`"
+            for (originalIndex, finding) in group {
+                findingNumber += 1
+                lines.append("#### Finding \(findingNumber): \(finding.title)")
+                var metaLine = "- File: `\(finding.filePath)`"
                 if let typeName = finding.typeName {
-                    line += " [\(typeName)]"
+                    metaLine += " [\(typeName)]"
                 }
                 if let lineNumber = finding.line {
-                    line += ":\(lineNumber)"
+                    metaLine += ":\(lineNumber)"
                 }
-                line += " – \(finding.message)"
-                lines.append(line)
+                if let countingMethod = finding.evidence["countingMethod"], !countingMethod.isEmpty {
+                    metaLine += " (Counting method: \(countingMethod)"
+                    if let confidence = finding.evidence["countingConfidence"], !confidence.isEmpty {
+                        metaLine += ", Confidence: \(confidence)"
+                    }
+                    metaLine += ")"
+                }
+                lines.append(metaLine)
+                lines.append("- Message: \(finding.message)")
+                lines.append("- Evidence:")
+                lines.append(contentsOf: evidenceLines(from: finding.evidence))
+                if let aiText = inlineAI[originalIndex], !aiText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("- AI Analysis:")
+                    aiText.split(separator: "\n", omittingEmptySubsequences: false).forEach {
+                        lines.append("  \($0)")
+                    }
+                }
+                lines.append("")
             }
-            lines.append("")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func summaryLines(findings: [Finding], swiftFileCount: Int?) -> [String] {
+        let high = findings.filter { $0.severity == .high }.count
+        let medium = findings.filter { $0.severity == .medium }.count
+        let low = findings.filter { $0.severity == .low }.count
+        let info = findings.filter { $0.severity == .info }.count
+        let rules = Array(Set(findings.map(\.ruleID))).sorted().joined(separator: ", ")
+
+        return [
+            "- Summary: machine-generated findings overview",
+            "- Swift files scanned: \(swiftFileCount.map(String.init) ?? "n/a")",
+            "- Total findings: \(findings.count)",
+            "- Severity breakdown: high \(high), medium \(medium), low \(low), info \(info)",
+            "- Rules triggered: \(rules.isEmpty ? "none" : rules)"
+        ]
+    }
+
+    private func evidenceLines(from evidence: [String: String]) -> [String] {
+        if evidence.isEmpty {
+            return ["  - none"]
+        }
+        return evidence
+            .filter { !$0.value.isEmpty }
+            .sorted { $0.key < $1.key }
+            .map { "  - \($0.key): \($0.value)" }
     }
 }

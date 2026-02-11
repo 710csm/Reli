@@ -26,7 +26,7 @@ struct ReliCommand: AsyncParsableCommand {
     var out: String?
 
     @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4, gpt-3.5-turbo).")
-    var model: String = "gpt-4"
+    var model: String = "gpt-4o-mini"
 
     func run() async throws {
         // Discover Swift files and build the lint context.
@@ -60,22 +60,29 @@ struct ReliCommand: AsyncParsableCommand {
             let reporter = JSONReporter()
             output = try reporter.report(findings: findings)
         default:
-            // Markdown with or without AI explanations.
+            // Markdown with or without inline AI explanations.
             let reporter = MarkdownReporter()
-            var report = reporter.report(findings: findings)
+            var inlineAI: [Int: String] = [:]
             if !noAI {
-                // Build AI prompt and invoke provider.
-                let prompt = Prompt.explain(findings: findings, projectName: URL(fileURLWithPath: path).lastPathComponent)
+                // Build iOS-focused prompts per finding and render responses inline.
                 let provider = OpenAIProvider(model: model)
-                do {
-                    let aiReport = try await provider.generateMarkdown(prompt: prompt)
-                    report += "\n\n## AI Recommendations\n\n" + aiReport
-                } catch {
-                    // If AI invocation fails, append a message but still return the raw report.
-                    report += "\n\n*Note: Failed to retrieve AI recommendations: \(error.localizedDescription)*"
+                let projectName = URL(fileURLWithPath: path).lastPathComponent
+                for (index, finding) in findings.enumerated() {
+                    let prompt = Prompt.explainFinding(
+                        finding: finding,
+                        projectName: projectName,
+                        findingNumber: index + 1,
+                        totalFindings: findings.count
+                    )
+                    do {
+                        let aiReport = try await provider.generateMarkdown(prompt: prompt)
+                        inlineAI[index] = aiReport
+                    } catch {
+                        inlineAI[index] = "### Root Cause\nUnable to retrieve AI analysis.\n\n### Recommended Split Boundaries\n- Derive groups from function prefixes (setup*/bind*/fetch*/handle*/validate*) and // MARK: sections in evidence.\n\n### Refactoring Steps\n- Retry with network/API key configured.\n\n### Risk & Verification Checklist\n- Run Instruments Leaks while entering/exiting the screen.\n- Repeat push/pop or present/dismiss navigation flow.\n- Verify async teardown (deinit/task cancellation).\n- Verify UI updates occur on main thread.\n- Error: \(error.localizedDescription)"
+                    }
                 }
             }
-            output = report
+            output = reporter.report(findings: findings, swiftFileCount: context.swiftFiles.count, inlineAI: inlineAI)
         }
         // Write or print output.
         if let outFile = out {
@@ -84,8 +91,5 @@ struct ReliCommand: AsyncParsableCommand {
         } else {
             print(output)
         }
-        
-        print("Total swift files:", context.swiftFiles.count)
-        print("Total findings:", findings.count)
     }
 }
