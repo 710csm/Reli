@@ -36,28 +36,21 @@ Built for local development and CI environments.
 
 ## Installation
 
-### Option 1 — Swift Package Manager (Source)
+### Option 1 — Homebrew (Recommended for distribution)
+
+```bash
+brew tap 710csm/tap
+brew install reli
+```
+
+---
+
+### Option 2 — Swift Package Manager (Source)
 
 ```bash
 git clone https://github.com/710csm/Reli.git
 cd Reli
 swift run reli --help
-```
-
----
-
-### Option 2 — Mint
-
-```bash
-mint install 710csm/Reli
-```
-
----
-
-### Option 3 — Homebrew (Recommended for distribution)
-
-```bash
-brew install 710csm/tap/reli
 ```
 
 ---
@@ -154,7 +147,7 @@ jobs:
 
       - name: Run Reli (static only)
         run: |
-          swift run reli --path . --no-ai --out reli-report.md
+          reli --path . --no-ai --out reli-report.md
 
       - name: Upload report
         uses: actions/upload-artifact@v4
@@ -170,7 +163,7 @@ With AI enabled:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          swift run reli --path . --out reli-report.md --model gpt-4o-mini
+          reli --path . --out reli-report.md --model gpt-4o-mini
 ```
 
 ---
