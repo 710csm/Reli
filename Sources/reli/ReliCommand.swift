@@ -49,6 +49,12 @@ struct ReliCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Comma separated list of rule identifiers to enable (default: all).")
     var rules: String?
 
+    @Option(name: .customLong("ignore-rules"), help: "Comma separated list of rule identifiers to ignore.")
+    var ignoreRules: String?
+
+    @Option(name: .customLong("ignore-paths"), help: "Comma separated glob patterns for file paths to ignore (e.g. Sources/Utils/**).")
+    var ignorePaths: String?
+
     @Option(name: .long, help: "Output format: markdown or json.")
     var format: String = "markdown"
 
@@ -57,6 +63,12 @@ struct ReliCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4o-mini, gpt-4.1-mini).")
     var model: String = "gpt-4o-mini"
+
+    @Option(
+        name: .customLong("di-singleton-allowlist"),
+        help: "Comma separated singleton access entries to ignore in di-smell (e.g. NotificationCenter.default,FileManager.default)."
+    )
+    var diSingletonAllowlist: String = "NotificationCenter.default,FileManager.default"
 
     @Option(
         name: .customLong("fail-on"),
@@ -96,6 +108,9 @@ struct ReliCommand: AsyncParsableCommand {
         // Normalize the root path so report paths + annotations are stable.
         let rootURL = URL(fileURLWithPath: path).standardizedFileURL
         let rootPath = rootURL.path
+        let ignoredRuleIDs = parseCSVSet(ignoreRules)
+        let ignoredPathPatterns = parseCSVList(ignorePaths)
+        let singletonAllowlist = parseCSVSet(diSingletonAllowlist)
 
         // Discover Swift files and build the lint context.
         let walker = FileWalker()
@@ -109,7 +124,7 @@ struct ReliCommand: AsyncParsableCommand {
         var selectedRules: [Rule] = []
         let allRules: [Rule] = [
             GodTypeRule(includeExtensions: includeExtensions),
-            DependencyInjectionSmellRule(),
+            DependencyInjectionSmellRule(singletonAllowlist: singletonAllowlist),
             AsyncLifecycleRule()
         ]
         if let rulesCSV = rules {
@@ -121,9 +136,13 @@ struct ReliCommand: AsyncParsableCommand {
         } else {
             selectedRules = allRules
         }
+        if !ignoredRuleIDs.isEmpty {
+            selectedRules.removeAll { ignoredRuleIDs.contains($0.id) }
+        }
         // Run linter.
         let linter = Linter(rules: selectedRules)
-        let findings = try linter.run(context: context)
+        let rawFindings = try linter.run(context: context)
+        let findings = applyIgnorePaths(to: rawFindings, rootPath: rootPath, patterns: ignoredPathPatterns)
         let prioritizedFindings = prioritize(findings)
         let cappedFindings = applyMaxFindings(to: prioritizedFindings)
         let reportFindings = applyPathStyle(to: cappedFindings, rootPath: rootPath)
@@ -243,5 +262,67 @@ struct ReliCommand: AsyncParsableCommand {
             return String(standardizedFile.dropFirst(standardizedRoot.count + 1))
         }
         return filePath
+    }
+
+    private func parseCSVSet(_ csv: String?) -> Set<String> {
+        Set(parseCSVList(csv))
+    }
+
+    private func parseCSVList(_ csv: String?) -> [String] {
+        guard let csv, !csv.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return csv
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func applyIgnorePaths(to findings: [Finding], rootPath: String, patterns: [String]) -> [Finding] {
+        guard !patterns.isEmpty else { return findings }
+        return findings.filter { finding in
+            let relative = makeRelativePath(finding.filePath, rootPath: rootPath)
+            return !patterns.contains { pattern in
+                globMatch(relative, pattern: pattern)
+            }
+        }
+    }
+
+    private func globMatch(_ path: String, pattern: String) -> Bool {
+        let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
+        var p = pattern.replacingOccurrences(of: "\\", with: "/")
+        if p.hasPrefix("./") {
+            p = String(p.dropFirst(2))
+        }
+
+        var regex = "^"
+        var idx = p.startIndex
+        while idx < p.endIndex {
+            let ch = p[idx]
+            if ch == "*" {
+                let next = p.index(after: idx)
+                if next < p.endIndex, p[next] == "*" {
+                    regex += ".*"
+                    idx = p.index(after: next)
+                } else {
+                    regex += "[^/]*"
+                    idx = next
+                }
+                continue
+            }
+            if ch == "?" {
+                regex += "[^/]"
+                idx = p.index(after: idx)
+                continue
+            }
+            if ".+()[]{}|^$\\".contains(ch) {
+                regex += "\\"
+            }
+            regex.append(ch)
+            idx = p.index(after: idx)
+        }
+        regex += "$"
+
+        guard let re = try? NSRegularExpression(pattern: regex, options: []) else { return false }
+        let range = NSRange(normalizedPath.startIndex..<normalizedPath.endIndex, in: normalizedPath)
+        return re.firstMatch(in: normalizedPath, options: [], range: range) != nil
     }
 }
