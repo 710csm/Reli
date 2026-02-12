@@ -6,6 +6,7 @@ import ArgumentParser
 @main
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
 struct ReliCommand: AsyncParsableCommand {
+    /// Top-level command metadata shown in `--help`.
     static let configuration = CommandConfiguration(
         abstract: "Lint a Swift package and optionally generate an AI‑powered refactoring report."
     )
@@ -79,6 +80,8 @@ struct ReliCommand: AsyncParsableCommand {
     )
     var pathStyle: PathStyle = .relative
 
+    /// Executes lint analysis, emits report output, then applies CI-oriented
+    /// behaviors such as annotations and fail-on thresholds.
     func run() async throws {
         if let maxFindings, maxFindings < 1 {
             throw ValidationError("--max-findings must be a positive integer.")
@@ -131,7 +134,7 @@ struct ReliCommand: AsyncParsableCommand {
         let cappedFindings = applyMaxFindings(to: prioritizedFindings)
         let reportFindings = applyPathStyle(to: cappedFindings, rootPath: rootPath)
         let omittedFindingsCount = max(0, prioritizedFindings.count - reportFindings.count)
-        // Build report.
+        // Build report output (JSON or Markdown with optional AI augmentation).
         var output: String
         switch format.lowercased() {
         case "json":

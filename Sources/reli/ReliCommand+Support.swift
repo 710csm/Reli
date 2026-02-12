@@ -1,12 +1,16 @@
 import Foundation
 import ReliCore
 
+/// Helper utilities extracted from `ReliCommand` to keep the command flow
+/// readable and focused on orchestration.
 extension ReliCommand {
+    /// Caps output findings while preserving existing ordering.
     func applyMaxFindings(to findings: [Finding]) -> [Finding] {
         guard let maxFindings else { return findings }
         return Array(findings.prefix(maxFindings))
     }
 
+    /// Sorts findings by severity first, then stable path/line/title ordering.
     func prioritize(_ findings: [Finding]) -> [Finding] {
         findings.sorted { lhs, rhs in
             if lhs.severity != rhs.severity { return lhs.severity > rhs.severity }
@@ -18,6 +22,7 @@ extension ReliCommand {
         }
     }
 
+    /// Rewrites finding file paths according to the selected path style.
     func applyPathStyle(to findings: [Finding], rootPath: String) -> [Finding] {
         findings.map { finding in
             let renderedPath: String
@@ -42,6 +47,7 @@ extension ReliCommand {
         }
     }
 
+    /// Converts an absolute path to a root-relative path when possible.
     func makeRelativePath(_ filePath: String, rootPath: String) -> String {
         let standardizedRoot = URL(fileURLWithPath: rootPath).standardizedFileURL.path
         let standardizedFile = URL(fileURLWithPath: filePath).standardizedFileURL.path
@@ -51,10 +57,12 @@ extension ReliCommand {
         return filePath
     }
 
+    /// Parses comma-separated input into a set.
     func parseCSVSet(_ csv: String?) -> Set<String> {
         Set(parseCSVList(csv))
     }
 
+    /// Parses comma-separated input into a trimmed list.
     func parseCSVList(_ csv: String?) -> [String] {
         guard let csv, !csv.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return csv
@@ -63,6 +71,7 @@ extension ReliCommand {
             .filter { !$0.isEmpty }
     }
 
+    /// Filters findings using glob-like path exclude patterns.
     func applyExcludePaths(to findings: [Finding], rootPath: String, patterns: [String]) -> [Finding] {
         guard !patterns.isEmpty else { return findings }
         return findings.filter { finding in
@@ -73,6 +82,7 @@ extension ReliCommand {
         }
     }
 
+    /// Minimal glob matcher supporting `*`, `**`, and `?`.
     func globMatch(_ path: String, pattern: String) -> Bool {
         let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
         var p = pattern.replacingOccurrences(of: "\\", with: "/")
@@ -116,6 +126,8 @@ extension ReliCommand {
         return re.firstMatch(in: normalizedPath, options: [], range: range) != nil
     }
 
+    /// Default path exclusions used to suppress test/sample noise unless
+    /// explicitly included by CLI flags.
     func defaultExcludedPathPatterns(includeTests: Bool, includeSamples: Bool) -> [String] {
         var patterns: [String] = []
         if !includeTests {
