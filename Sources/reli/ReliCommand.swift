@@ -28,6 +28,11 @@ enum AnnotationsMode: String, ExpressibleByArgument {
     case github
 }
 
+enum PathStyle: String, ExpressibleByArgument {
+    case relative
+    case absolute
+}
+
 @main
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
 struct ReliCommand: AsyncParsableCommand {
@@ -77,6 +82,12 @@ struct ReliCommand: AsyncParsableCommand {
     )
     var maxFindings: Int?
 
+    @Option(
+        name: .customLong("path-style"),
+        help: "Render file paths as absolute or repo-relative (absolute|relative)."
+    )
+    var pathStyle: PathStyle = .relative
+
     func run() async throws {
         if let maxFindings, maxFindings < 1 {
             throw ValidationError("--max-findings must be a positive integer.")
@@ -114,7 +125,8 @@ struct ReliCommand: AsyncParsableCommand {
         let linter = Linter(rules: selectedRules)
         let findings = try linter.run(context: context)
         let prioritizedFindings = prioritize(findings)
-        let reportFindings = applyMaxFindings(to: prioritizedFindings)
+        let cappedFindings = applyMaxFindings(to: prioritizedFindings)
+        let reportFindings = applyPathStyle(to: cappedFindings, rootPath: rootPath)
         let omittedFindingsCount = max(0, prioritizedFindings.count - reportFindings.count)
         // Build report.
         var output: String
@@ -172,7 +184,8 @@ struct ReliCommand: AsyncParsableCommand {
         }
 
         if annotations == .github {
-            GitHubAnnotationsEmitter(projectRoot: rootPath).emit(findings: reportFindings)
+            GitHubAnnotationsEmitter(projectRoot: rootPath, normalizeRelativePaths: pathStyle == .relative)
+                .emit(findings: reportFindings)
         }
 
         if let threshold = failOn.threshold {
@@ -197,5 +210,38 @@ struct ReliCommand: AsyncParsableCommand {
             if lhsLine != rhsLine { return lhsLine < rhsLine }
             return lhs.title < rhs.title
         }
+    }
+
+    private func applyPathStyle(to findings: [Finding], rootPath: String) -> [Finding] {
+        findings.map { finding in
+            let renderedPath: String
+            switch pathStyle {
+            case .absolute:
+                renderedPath = URL(fileURLWithPath: finding.filePath).standardizedFileURL.path
+            case .relative:
+                renderedPath = makeRelativePath(finding.filePath, rootPath: rootPath)
+            }
+            return Finding(
+                ruleID: finding.ruleID,
+                title: finding.title,
+                message: finding.message,
+                severity: finding.severity,
+                filePath: renderedPath,
+                line: finding.line,
+                column: finding.column,
+                typeName: finding.typeName,
+                evidence: finding.evidence,
+                snippet: finding.snippet
+            )
+        }
+    }
+
+    private func makeRelativePath(_ filePath: String, rootPath: String) -> String {
+        let standardizedRoot = URL(fileURLWithPath: rootPath).standardizedFileURL.path
+        let standardizedFile = URL(fileURLWithPath: filePath).standardizedFileURL.path
+        if standardizedFile.hasPrefix(standardizedRoot + "/") {
+            return String(standardizedFile.dropFirst(standardizedRoot.count + 1))
+        }
+        return filePath
     }
 }
