@@ -60,7 +60,7 @@ public struct DependencyInjectionSmellRule: Rule {
             }
             let filteredInstantiation = instantiationDetails.filter { !excludedInstantiationTypes.contains($0.type) }
             let instantiationCount = filteredInstantiation.count
-            let typeNames = extractRelevantTypeNames(from: text)
+            let typeNames = RuleTypeNameExtractor.extractRelevantTypeNames(from: text)
             if singletonCount >= sharedThreshold || instantiationCount >= instantiationThreshold {
                 let severity: Severity = (singletonCount >= max(sharedThreshold * 2, 12) || instantiationCount >= max(instantiationThreshold * 2, 40)) ? .high : .medium
                 let issueLine = firstIssueLine(
@@ -100,30 +100,6 @@ public struct DependencyInjectionSmellRule: Rule {
             }
         }
         return findings
-    }
-
-    private func extractRelevantTypeNames(from text: String) -> [String] {
-        let declarationPattern = try! NSRegularExpression(
-            pattern: "\\b(?:final\\s+)?(?:public\\s+|internal\\s+|private\\s+|fileprivate\\s+|open\\s+)?(?:class|struct|actor)\\s+([A-Z][A-Za-z0-9_]*)",
-            options: []
-        )
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = declarationPattern.matches(in: text, options: [], range: range)
-
-        var allNames: [String] = []
-        for match in matches {
-            guard let nameRange = Range(match.range(at: 1), in: text) else { continue }
-            let name = String(text[nameRange])
-            if !allNames.contains(name) {
-                allNames.append(name)
-            }
-        }
-
-        let targetSuffixes = ["ViewController", "VC", "ViewModel", "VM"]
-        let focused = allNames.filter { name in
-            targetSuffixes.contains { name.hasSuffix($0) }
-        }
-        return focused.isEmpty ? allNames : focused
     }
 
     private func firstIssueLine(

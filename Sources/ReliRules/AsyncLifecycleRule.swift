@@ -42,7 +42,7 @@ public struct AsyncLifecycleRule: Rule {
             let dispatchAfterCount = dispatchAfterSites.count
             let cancelCount = cancelPattern.numberOfMatches(in: text, options: [], range: range)
             let deinitCount = deinitPattern.numberOfMatches(in: text, options: [], range: range)
-            let typeNames = extractRelevantTypeNames(from: text)
+            let typeNames = RuleTypeNameExtractor.extractRelevantTypeNames(from: text)
             let asyncTotal = taskCount + timerCount + dispatchAfterCount
             let cancelHints = cancelCount + deinitCount
             if asyncTotal >= asyncThreshold && cancelHints < cancelHintThreshold {
@@ -78,30 +78,6 @@ public struct AsyncLifecycleRule: Rule {
             }
         }
         return findings
-    }
-
-    private func extractRelevantTypeNames(from text: String) -> [String] {
-        let declarationPattern = try! NSRegularExpression(
-            pattern: "\\b(?:final\\s+)?(?:public\\s+|internal\\s+|private\\s+|fileprivate\\s+|open\\s+)?(?:class|struct|actor)\\s+([A-Z][A-Za-z0-9_]*)",
-            options: []
-        )
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = declarationPattern.matches(in: text, options: [], range: range)
-
-        var allNames: [String] = []
-        for match in matches {
-            guard let nameRange = Range(match.range(at: 1), in: text) else { continue }
-            let name = String(text[nameRange])
-            if !allNames.contains(name) {
-                allNames.append(name)
-            }
-        }
-
-        let targetSuffixes = ["ViewController", "VC", "ViewModel", "VM"]
-        let focused = allNames.filter { name in
-            targetSuffixes.contains { name.hasSuffix($0) }
-        }
-        return focused.isEmpty ? allNames : focused
     }
 
     private func firstIssueLine(from sites: [IssueSite]) -> Int? {
