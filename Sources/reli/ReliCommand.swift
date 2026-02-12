@@ -126,22 +126,29 @@ struct ReliCommand: AsyncParsableCommand {
             // Markdown with or without inline AI explanations.
             let reporter = MarkdownReporter()
             var inlineAI: [Int: String] = [:]
+            var aiStatus: String?
             if !noAI {
-                // Build iOS-focused prompts per finding and render responses inline.
-                let provider = OpenAIProvider(model: model)
-                let projectName = rootURL.lastPathComponent
-                for (index, finding) in reportFindings.enumerated() {
-                    let prompt = Prompt.explainFinding(
-                        finding: finding,
-                        projectName: projectName,
-                        findingNumber: index + 1,
-                        totalFindings: reportFindings.count
-                    )
-                    do {
-                        let aiReport = try await provider.generateMarkdown(prompt: prompt)
-                        inlineAI[index] = aiReport
-                    } catch {
-                        inlineAI[index] = "### Root Cause\nUnable to retrieve AI analysis.\n\n### Recommended Split Boundaries\n- Derive groups from function prefixes (setup*/bind*/fetch*/handle*/validate*) and // MARK: sections in evidence.\n\n### Refactoring Steps\n- Retry with network/API key configured.\n\n### Risk & Verification Checklist\n- Run Instruments Leaks while entering/exiting the screen.\n- Repeat push/pop or present/dismiss navigation flow.\n- Verify async teardown (deinit/task cancellation).\n- Verify UI updates occur on main thread.\n- Error: \(error.localizedDescription)"
+                let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if apiKey.isEmpty {
+                    aiStatus = "disabled (OPENAI_API_KEY not set)"
+                } else {
+                    // Build iOS-focused prompts per finding and render responses inline.
+                    let provider = OpenAIProvider(apiKey: apiKey, model: model)
+                    let projectName = rootURL.lastPathComponent
+                    for (index, finding) in reportFindings.enumerated() {
+                        let prompt = Prompt.explainFinding(
+                            finding: finding,
+                            projectName: projectName,
+                            findingNumber: index + 1,
+                            totalFindings: reportFindings.count
+                        )
+                        do {
+                            let aiReport = try await provider.generateMarkdown(prompt: prompt)
+                            inlineAI[index] = aiReport
+                        } catch {
+                            inlineAI[index] = "### Root Cause\nUnable to retrieve AI analysis.\n\n### Recommended Split Boundaries\n- Derive groups from function prefixes (setup*/bind*/fetch*/handle*/validate*) and // MARK: sections in evidence.\n\n### Refactoring Steps\n- Retry with network/API key configured.\n\n### Risk & Verification Checklist\n- Run Instruments Leaks while entering/exiting the screen.\n- Repeat push/pop or present/dismiss navigation flow.\n- Verify async teardown (deinit/task cancellation).\n- Verify UI updates occur on main thread.\n- Error: \(error.localizedDescription)"
+                        }
                     }
                 }
             }
@@ -149,7 +156,8 @@ struct ReliCommand: AsyncParsableCommand {
                 findings: reportFindings,
                 swiftFileCount: context.swiftFiles.count,
                 inlineAI: inlineAI,
-                totalFindings: prioritizedFindings.count
+                totalFindings: prioritizedFindings.count,
+                aiStatus: aiStatus
             )
             if omittedFindingsCount > 0 {
                 output += "\n\n_Note: Showing top \(reportFindings.count) of \(prioritizedFindings.count) findings (`--max-findings \(reportFindings.count)`)._"
