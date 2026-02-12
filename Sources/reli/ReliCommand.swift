@@ -55,6 +55,9 @@ struct ReliCommand: AsyncParsableCommand {
     @Option(name: .customLong("ignore-paths"), help: "Comma separated glob patterns for file paths to ignore (e.g. Sources/Utils/**).")
     var ignorePaths: String?
 
+    @Option(name: .customLong("exclude-paths"), help: "Comma separated glob patterns for file paths to exclude (e.g. Sources/Utils/**).")
+    var excludePaths: String?
+
     @Option(name: .long, help: "Output format: markdown or json.")
     var format: String = "markdown"
 
@@ -88,6 +91,12 @@ struct ReliCommand: AsyncParsableCommand {
     )
     var includeExtensions: Bool = false
 
+    @Flag(name: .customLong("include-tests"), help: "Include test paths in analysis output.")
+    var includeTests: Bool = false
+
+    @Flag(name: .customLong("include-samples"), help: "Include sample/example paths in analysis output.")
+    var includeSamples: Bool = false
+
     @Option(
         name: .customLong("max-findings"),
         help: "Limit report/annotation output to the top N findings."
@@ -109,7 +118,12 @@ struct ReliCommand: AsyncParsableCommand {
         let rootURL = URL(fileURLWithPath: path).standardizedFileURL
         let rootPath = rootURL.path
         let ignoredRuleIDs = parseCSVSet(ignoreRules)
-        let ignoredPathPatterns = parseCSVList(ignorePaths)
+        var excludedPathPatterns = defaultExcludedPathPatterns(
+            includeTests: includeTests,
+            includeSamples: includeSamples
+        )
+        excludedPathPatterns.append(contentsOf: parseCSVList(ignorePaths))
+        excludedPathPatterns.append(contentsOf: parseCSVList(excludePaths))
         let singletonAllowlist = parseCSVSet(diSingletonAllowlist)
 
         // Discover Swift files and build the lint context.
@@ -142,7 +156,7 @@ struct ReliCommand: AsyncParsableCommand {
         // Run linter.
         let linter = Linter(rules: selectedRules)
         let rawFindings = try linter.run(context: context)
-        let findings = applyIgnorePaths(to: rawFindings, rootPath: rootPath, patterns: ignoredPathPatterns)
+        let findings = applyExcludePaths(to: rawFindings, rootPath: rootPath, patterns: excludedPathPatterns)
         let prioritizedFindings = prioritize(findings)
         let cappedFindings = applyMaxFindings(to: prioritizedFindings)
         let reportFindings = applyPathStyle(to: cappedFindings, rootPath: rootPath)
@@ -276,7 +290,7 @@ struct ReliCommand: AsyncParsableCommand {
             .filter { !$0.isEmpty }
     }
 
-    private func applyIgnorePaths(to findings: [Finding], rootPath: String, patterns: [String]) -> [Finding] {
+    private func applyExcludePaths(to findings: [Finding], rootPath: String, patterns: [String]) -> [Finding] {
         guard !patterns.isEmpty else { return findings }
         return findings.filter { finding in
             let relative = makeRelativePath(finding.filePath, rootPath: rootPath)
@@ -289,6 +303,9 @@ struct ReliCommand: AsyncParsableCommand {
     private func globMatch(_ path: String, pattern: String) -> Bool {
         let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
         var p = pattern.replacingOccurrences(of: "\\", with: "/")
+        if p.hasPrefix("/") {
+            p = String(p.dropFirst())
+        }
         if p.hasPrefix("./") {
             p = String(p.dropFirst(2))
         }
@@ -324,5 +341,28 @@ struct ReliCommand: AsyncParsableCommand {
         guard let re = try? NSRegularExpression(pattern: regex, options: []) else { return false }
         let range = NSRange(normalizedPath.startIndex..<normalizedPath.endIndex, in: normalizedPath)
         return re.firstMatch(in: normalizedPath, options: [], range: range) != nil
+    }
+
+    private func defaultExcludedPathPatterns(includeTests: Bool, includeSamples: Bool) -> [String] {
+        var patterns: [String] = []
+        if !includeTests {
+            patterns.append(contentsOf: [
+                "*Tests*/**",
+                "Tests/**",
+                "**/*Tests*/**",
+                "**/Tests/**"
+            ])
+        }
+        if !includeSamples {
+            patterns.append(contentsOf: [
+                "*Sample*/**",
+                "**/*Sample*/**",
+                "Examples/**",
+                "*/Examples/**",
+                "**/Examples/**",
+                "Examples/**"
+            ])
+        }
+        return patterns
     }
 }
