@@ -25,7 +25,10 @@ public struct MarkdownReporter {
         findings: [Finding],
         swiftFileCount: Int?,
         inlineAI: [Int: String],
-        totalFindings: Int? = nil
+        totalFindings: Int? = nil,
+        aiStatus: String? = nil,
+        aiCallLimit: Int? = nil,
+        aiPlannedCalls: Int? = nil
     ) -> String {
         // Group findings by severity.
         let indexedFindings = Array(findings.enumerated())
@@ -35,7 +38,16 @@ public struct MarkdownReporter {
         var lines: [String] = []
         lines.append("## AIRefactorLint Report")
         lines.append("")
-        lines.append(contentsOf: summaryLines(findings: findings, swiftFileCount: swiftFileCount, totalFindings: totalFindings))
+        lines.append(
+            contentsOf: summaryLines(
+                findings: findings,
+                swiftFileCount: swiftFileCount,
+                totalFindings: totalFindings,
+                aiStatus: aiStatus,
+                aiCallLimit: aiCallLimit,
+                aiPlannedCalls: aiPlannedCalls
+            )
+        )
         lines.append("")
         if findings.isEmpty {
             lines.append("_No issues detected by enabled rules._")
@@ -80,7 +92,14 @@ public struct MarkdownReporter {
         return lines.joined(separator: "\n")
     }
 
-    private func summaryLines(findings: [Finding], swiftFileCount: Int?, totalFindings: Int?) -> [String] {
+    private func summaryLines(
+        findings: [Finding],
+        swiftFileCount: Int?,
+        totalFindings: Int?,
+        aiStatus: String?,
+        aiCallLimit: Int?,
+        aiPlannedCalls: Int?
+    ) -> [String] {
         let high = findings.filter { $0.severity == .high }.count
         let medium = findings.filter { $0.severity == .medium }.count
         let low = findings.filter { $0.severity == .low }.count
@@ -88,13 +107,25 @@ public struct MarkdownReporter {
         let rules = Array(Set(findings.map(\.ruleID))).sorted().joined(separator: ", ")
         let total = totalFindings ?? findings.count
 
-        return [
+        var lines = [
             "- Summary: machine-generated findings overview",
             "- Swift files scanned: \(swiftFileCount.map(String.init) ?? "n/a")",
             "- Total findings: \(total)",
             "- Severity breakdown: high \(high), medium \(medium), low \(low), info \(info)",
             "- Rules triggered: \(rules.isEmpty ? "none" : rules)"
         ]
+        if let aiStatus, !aiStatus.isEmpty {
+            lines.append("- AI: \(aiStatus)")
+        }
+        if let aiCallLimit {
+            lines.append("- AI call limit: up to \(aiCallLimit) findings per run (`--ai-limit`, default: 5)")
+        }
+        if let aiPlannedCalls {
+            lines.append("- AI planned calls this run: \(aiPlannedCalls)")
+        }
+        lines.append("- Top 5 files by findings: \(topFilesSummary(from: findings))")
+        lines.append("- Top 5 types by size: \(topTypesSummary(from: findings))")
+        return lines
     }
 
     private func evidenceLines(from evidence: [String: String]) -> [String] {
@@ -105,5 +136,42 @@ public struct MarkdownReporter {
             .filter { !$0.value.isEmpty }
             .sorted { $0.key < $1.key }
             .map { "  - \($0.key): \($0.value)" }
+    }
+
+    private func topFilesSummary(from findings: [Finding], limit: Int = 5) -> String {
+        let ranked = Dictionary(grouping: findings, by: \.filePath)
+            .map { (file: $0.key, count: $0.value.count) }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count { return lhs.file < rhs.file }
+                return lhs.count > rhs.count
+            }
+            .prefix(limit)
+
+        guard !ranked.isEmpty else { return "none" }
+        return ranked
+            .map { "\($0.file) (\($0.count))" }
+            .joined(separator: " | ")
+    }
+
+    private func topTypesSummary(from findings: [Finding], limit: Int = 5) -> String {
+        var largestByType: [String: Int] = [:]
+        for finding in findings {
+            guard let typeName = finding.typeName, !typeName.isEmpty else { continue }
+            guard let lineCountText = finding.evidence["lineCount"], let lineCount = Int(lineCountText) else { continue }
+            largestByType[typeName] = max(largestByType[typeName] ?? 0, lineCount)
+        }
+
+        let ranked = largestByType
+            .map { (type: $0.key, lineCount: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.lineCount == rhs.lineCount { return lhs.type < rhs.type }
+                return lhs.lineCount > rhs.lineCount
+            }
+            .prefix(limit)
+
+        guard !ranked.isEmpty else { return "none" }
+        return ranked
+            .map { "\($0.type) (\($0.lineCount)L)" }
+            .joined(separator: " | ")
     }
 }

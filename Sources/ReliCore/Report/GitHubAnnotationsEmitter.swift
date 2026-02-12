@@ -3,9 +3,11 @@ import Foundation
 /// Emits lint findings as GitHub Actions workflow command annotations.
 public struct GitHubAnnotationsEmitter {
     private let projectRoot: String
+    private let normalizeRelativePaths: Bool
 
-    public init(projectRoot: String) {
+    public init(projectRoot: String, normalizeRelativePaths: Bool = true) {
         self.projectRoot = URL(fileURLWithPath: projectRoot).standardizedFileURL.path
+        self.normalizeRelativePaths = normalizeRelativePaths
     }
 
     public func emit(findings: [Finding]) {
@@ -15,7 +17,7 @@ public struct GitHubAnnotationsEmitter {
             guard let line = finding.line else { continue }
 
             let level = mapLevel(finding.severity)
-            let file = escapeProperty(relativePath(for: finding.filePath))
+            let file = escapeProperty(normalizePathForAnnotation(finding.filePath))
             let title = escapeProperty(finding.title)
             let message = escapeMessage(finding.message)
 
@@ -48,6 +50,13 @@ public struct GitHubAnnotationsEmitter {
         }
         if filePath.hasPrefix("./") {
             return String(filePath.dropFirst(2))
+        }
+        return filePath
+    }
+
+    private func normalizePathForAnnotation(_ filePath: String) -> String {
+        if normalizeRelativePaths {
+            return relativePath(for: filePath)
         }
         return filePath
     }

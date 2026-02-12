@@ -36,7 +36,7 @@ public struct GodTypeRule: Rule {
         for metric in metrics {
             let lineCount = metric.lineCount
             let funcCount = metric.functions.count
-            guard lineCount >= lineThreshold || funcCount >= functionThreshold else { continue }
+            guard let trigger = triggerKind(lineCount: lineCount, funcCount: funcCount) else { continue }
 
             let severity: Severity = (lineCount >= max(lineThreshold * 2, 600) || funcCount >= max(functionThreshold * 2, 40)) ? .high : .medium
             let snippet = SnippetBuilder.around(text: metric.sourceText, line: metric.startLine)
@@ -55,7 +55,13 @@ public struct GodTypeRule: Rule {
                 .map { "\($0.prefix): \($0.count)" }
                 .joined(separator: ", ")
             let markSections = metric.markSections.prefix(8).joined(separator: ", ")
-            let message = "\(metric.kind.capitalized) `\(metric.name)` appears large (\(lineCount) lines, \(funcCount) functions by SwiftSyntax counting). Consider splitting responsibilities by feature boundaries. Counting method: swift-syntax (v0.2), confidence: high."
+            let splitCandidates = splitCandidates(from: metric.markSections)
+            let message = buildMessage(
+                metric: metric,
+                trigger: trigger,
+                lineCount: lineCount,
+                funcCount: funcCount
+            )
 
             findings.append(
                 Finding(
@@ -82,6 +88,8 @@ public struct GodTypeRule: Rule {
                         "uiActionCount": "\(metric.uiActionCount)",
                         "functionPrefixGroups": prefixGroups.isEmpty ? "none" : prefixGroups,
                         "markSections": markSections.isEmpty ? "none" : markSections,
+                        "splitCandidates": splitCandidates.isEmpty ? "none" : splitCandidates.joined(separator: " / "),
+                        "triggerKind": trigger.rawValue,
                         "countingMethod": "swift-syntax (v0.2)",
                         "countingConfidence": "high"
                     ],
@@ -179,6 +187,62 @@ public struct GodTypeRule: Rule {
             if lhs.count == rhs.count { return lhs.prefix < rhs.prefix }
             return lhs.count > rhs.count
         }
+    }
+
+    private func triggerKind(lineCount: Int, funcCount: Int) -> TriggerKind? {
+        let largeByLines = lineCount >= lineThreshold
+        let largeByFunctions = funcCount >= functionThreshold
+        switch (largeByLines, largeByFunctions) {
+        case (true, true):
+            return .largeByBoth
+        case (true, false):
+            return .largeByLines
+        case (false, true):
+            return .largeByFunctions
+        case (false, false):
+            return nil
+        }
+    }
+
+    private func buildMessage(
+        metric: AnalyzedTypeMetric,
+        trigger: TriggerKind,
+        lineCount: Int,
+        funcCount: Int
+    ) -> String {
+        let reason: String
+        switch trigger {
+        case .largeByBoth:
+            reason = "Large by both lines (\(lineCount) > \(lineThreshold)) and function count (\(funcCount) > \(functionThreshold))."
+        case .largeByLines:
+            reason = "Large by lines (\(lineCount) > \(lineThreshold)) even though function count is moderate (\(funcCount))."
+        case .largeByFunctions:
+            reason = "Large by function count (\(funcCount) > \(functionThreshold)) with line count at \(lineCount)."
+        }
+
+        return "\(metric.kind.capitalized) `\(metric.name)` appears large. \(reason) Counting method: swift-syntax (v0.2), confidence: high."
+    }
+
+    private func splitCandidates(from markSections: [String]) -> [String] {
+        let cleaned = markSections
+            .map { raw -> String in
+                raw
+                    .replacingOccurrences(of: "-", with: " ")
+                    .replacingOccurrences(of: "_", with: " ")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .filter { !$0.isEmpty && $0 != "-" }
+
+        if !cleaned.isEmpty {
+            return Array(cleaned.prefix(4))
+        }
+        return ["UI Components", "Bindings", "Actions"]
+    }
+
+    private enum TriggerKind: String {
+        case largeByLines
+        case largeByFunctions
+        case largeByBoth
     }
 
     private struct AnalyzedTypeMetric {

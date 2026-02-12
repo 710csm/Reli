@@ -26,7 +26,7 @@ public struct AsyncLifecycleRule: Rule {
 
     public func check(_ context: LintContext) throws -> [Finding] {
         var findings: [Finding] = []
-        let taskPattern = try! NSRegularExpression(pattern: "\\bTask\\s*\\{", options: [])
+        let taskPattern = try! NSRegularExpression(pattern: "\\bTask(?:\\.detached)?\\s*\\{", options: [])
         let timerPattern = try! NSRegularExpression(pattern: "\\bTimer\\.scheduledTimer", options: [])
         let dispatchAfterPattern = try! NSRegularExpression(pattern: "\\bDispatchQueue\\..*asyncAfter", options: [])
         let cancelPattern = try! NSRegularExpression(pattern: "\\bcancel\\(", options: [])
@@ -34,19 +34,19 @@ public struct AsyncLifecycleRule: Rule {
         for (path, text) in context.fileContents {
             guard path.hasSuffix(".swift") else { continue }
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            let taskCount = taskPattern.numberOfMatches(in: text, options: [], range: range)
-            let timerCount = timerPattern.numberOfMatches(in: text, options: [], range: range)
-            let dispatchAfterCount = dispatchAfterPattern.numberOfMatches(in: text, options: [], range: range)
+            let taskSites = collectSites(in: text, regex: taskPattern)
+            let timerSites = collectSites(in: text, regex: timerPattern)
+            let dispatchAfterSites = collectSites(in: text, regex: dispatchAfterPattern)
+            let taskCount = taskSites.count
+            let timerCount = timerSites.count
+            let dispatchAfterCount = dispatchAfterSites.count
             let cancelCount = cancelPattern.numberOfMatches(in: text, options: [], range: range)
             let deinitCount = deinitPattern.numberOfMatches(in: text, options: [], range: range)
-            let typeNames = extractRelevantTypeNames(from: text)
+            let typeNames = RuleTypeNameExtractor.extractRelevantTypeNames(from: text)
             let asyncTotal = taskCount + timerCount + dispatchAfterCount
             let cancelHints = cancelCount + deinitCount
             if asyncTotal >= asyncThreshold && cancelHints < cancelHintThreshold {
-                let issueLine = firstIssueLine(
-                    in: text,
-                    patterns: [taskPattern, timerPattern, dispatchAfterPattern]
-                )
+                let issueLine = firstIssueLine(from: taskSites + timerSites + dispatchAfterSites)
                 var evidence: [String: String] = [
                     "taskCount": "\(taskCount)",
                     "timerCount": "\(timerCount)",
@@ -56,6 +56,9 @@ public struct AsyncLifecycleRule: Rule {
                     "asyncThreshold": "\(asyncThreshold)",
                     "cancelHintThreshold": "\(cancelHintThreshold)"
                 ]
+                evidence["taskSites"] = siteSummary(taskSites)
+                evidence["timerSites"] = siteSummary(timerSites)
+                evidence["dispatchAfterSites"] = siteSummary(dispatchAfterSites)
                 if !typeNames.isEmpty {
                     evidence["typeNames"] = typeNames.joined(separator: ", ")
                 }
@@ -77,44 +80,32 @@ public struct AsyncLifecycleRule: Rule {
         return findings
     }
 
-    private func extractRelevantTypeNames(from text: String) -> [String] {
-        let declarationPattern = try! NSRegularExpression(
-            pattern: "\\b(?:final\\s+)?(?:public\\s+|internal\\s+|private\\s+|fileprivate\\s+|open\\s+)?(?:class|struct|actor)\\s+([A-Z][A-Za-z0-9_]*)",
-            options: []
-        )
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = declarationPattern.matches(in: text, options: [], range: range)
-
-        var allNames: [String] = []
-        for match in matches {
-            guard let nameRange = Range(match.range(at: 1), in: text) else { continue }
-            let name = String(text[nameRange])
-            if !allNames.contains(name) {
-                allNames.append(name)
-            }
-        }
-
-        let targetSuffixes = ["ViewController", "VC", "ViewModel", "VM"]
-        let focused = allNames.filter { name in
-            targetSuffixes.contains { name.hasSuffix($0) }
-        }
-        return focused.isEmpty ? allNames : focused
+    private func firstIssueLine(from sites: [IssueSite]) -> Int? {
+        sites.min(by: { $0.line < $1.line })?.line
     }
 
-    private func firstIssueLine(in text: String, patterns: [NSRegularExpression]) -> Int? {
-        let searchRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        var smallestLocation: Int?
-
-        for pattern in patterns {
-            guard let match = pattern.firstMatch(in: text, options: [], range: searchRange) else { continue }
-            if let current = smallestLocation {
-                smallestLocation = min(current, match.range.location)
-            } else {
-                smallestLocation = match.range.location
-            }
+    private func collectSites(in text: String, regex: NSRegularExpression) -> [IssueSite] {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        return regex.matches(in: text, options: [], range: range).compactMap { match in
+            let line = SnippetBuilder.lineNumber(in: text, utf16Offset: match.range.location)
+            guard line > 0, line <= lines.count else { return nil }
+            let rawSnippet = lines[line - 1].trimmingCharacters(in: .whitespaces)
+            let snippet = String(rawSnippet.prefix(120))
+            return IssueSite(line: line, snippet: snippet)
         }
+    }
 
-        guard let location = smallestLocation else { return nil }
-        return SnippetBuilder.lineNumber(in: text, utf16Offset: location)
+    private func siteSummary(_ sites: [IssueSite], maxSamples: Int = 3) -> String {
+        if sites.isEmpty { return "none" }
+        return sites
+            .prefix(maxSamples)
+            .map { "L\($0.line): \($0.snippet)" }
+            .joined(separator: " | ")
+    }
+
+    private struct IssueSite {
+        let line: Int
+        let snippet: String
     }
 }
