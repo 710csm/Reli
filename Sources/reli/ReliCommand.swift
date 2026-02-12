@@ -38,6 +38,9 @@ struct ReliCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4o-mini, gpt-4.1-mini).")
     var model: String = "gpt-4o-mini"
 
+    @Option(name: .long, help: "Maximum number of findings to send to AI for explanations.")
+    var aiLimit: Int = 5
+
     @Option(
         name: .customLong("di-singleton-allowlist"),
         help: "Comma separated singleton access entries to ignore in di-smell (e.g. NotificationCenter.default,FileManager.default)."
@@ -85,6 +88,9 @@ struct ReliCommand: AsyncParsableCommand {
     func run() async throws {
         if let maxFindings, maxFindings < 1 {
             throw ValidationError("--max-findings must be a positive integer.")
+        }
+        if aiLimit < 0 {
+            throw ValidationError("--ai-limit must be zero or a positive integer.")
         }
 
         // Normalize the root path so report paths + annotations are stable.
@@ -145,21 +151,37 @@ struct ReliCommand: AsyncParsableCommand {
             let reporter = MarkdownReporter()
             var inlineAI: [Int: String] = [:]
             var aiStatus: String?
-            if !noAI {
+            var aiPlannedCalls: Int? = 0
+            if noAI {
+                aiStatus = "disabled (--no-ai)"
+            } else {
+                aiPlannedCalls = min(aiLimit, reportFindings.count)
                 let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if apiKey.isEmpty {
                     aiStatus = "disabled (OPENAI_API_KEY not set)"
+                    aiPlannedCalls = 0
                 } else {
                     // Build iOS-focused prompts per finding and render responses inline.
                     let provider = OpenAIProvider(apiKey: apiKey, model: model)
                     let projectName = rootURL.lastPathComponent
-                    for (index, finding) in reportFindings.enumerated() {
+                    let aiIndices = AILimitSelector.selectedIndices(
+                        totalFindings: reportFindings.count,
+                        limit: aiLimit
+                    )
+                    aiPlannedCalls = aiIndices.count
+                    for (position, index) in aiIndices.enumerated() {
+                        let finding = reportFindings[index]
+                        let lineText = finding.line.map(String.init) ?? "?"
+                        fputs(
+                            "[reli][ai] request \(position + 1)/\(aiIndices.count): \(finding.filePath):\(lineText) \(finding.title)\n",
+                            stderr
+                        )
                         let prompt = Prompt.explainFinding(
                             finding: finding,
                             projectName: projectName,
-                            findingNumber: index + 1,
-                            totalFindings: reportFindings.count
+                            findingNumber: position + 1,
+                            totalFindings: aiIndices.count
                         )
                         do {
                             let aiReport = try await provider.generateMarkdown(prompt: prompt)
@@ -175,7 +197,9 @@ struct ReliCommand: AsyncParsableCommand {
                 swiftFileCount: context.swiftFiles.count,
                 inlineAI: inlineAI,
                 totalFindings: prioritizedFindings.count,
-                aiStatus: aiStatus
+                aiStatus: aiStatus,
+                aiCallLimit: aiLimit,
+                aiPlannedCalls: aiPlannedCalls
             )
             if omittedFindingsCount > 0 {
                 output += "\n\n_Note: Showing top \(reportFindings.count) of \(prioritizedFindings.count) findings (`--max-findings \(reportFindings.count)`)._"

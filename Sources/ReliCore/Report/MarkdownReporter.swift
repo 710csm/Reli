@@ -26,7 +26,9 @@ public struct MarkdownReporter {
         swiftFileCount: Int?,
         inlineAI: [Int: String],
         totalFindings: Int? = nil,
-        aiStatus: String? = nil
+        aiStatus: String? = nil,
+        aiCallLimit: Int? = nil,
+        aiPlannedCalls: Int? = nil
     ) -> String {
         // Group findings by severity.
         let indexedFindings = Array(findings.enumerated())
@@ -41,7 +43,9 @@ public struct MarkdownReporter {
                 findings: findings,
                 swiftFileCount: swiftFileCount,
                 totalFindings: totalFindings,
-                aiStatus: aiStatus
+                aiStatus: aiStatus,
+                aiCallLimit: aiCallLimit,
+                aiPlannedCalls: aiPlannedCalls
             )
         )
         lines.append("")
@@ -92,7 +96,9 @@ public struct MarkdownReporter {
         findings: [Finding],
         swiftFileCount: Int?,
         totalFindings: Int?,
-        aiStatus: String?
+        aiStatus: String?,
+        aiCallLimit: Int?,
+        aiPlannedCalls: Int?
     ) -> [String] {
         let high = findings.filter { $0.severity == .high }.count
         let medium = findings.filter { $0.severity == .medium }.count
@@ -110,6 +116,12 @@ public struct MarkdownReporter {
         ]
         if let aiStatus, !aiStatus.isEmpty {
             lines.append("- AI: \(aiStatus)")
+        }
+        if let aiCallLimit {
+            lines.append("- AI call limit: up to \(aiCallLimit) findings per run (`--ai-limit`, default: 5)")
+        }
+        if let aiPlannedCalls {
+            lines.append("- AI planned calls this run: \(aiPlannedCalls)")
         }
         lines.append("- Top 5 files by findings: \(topFilesSummary(from: findings))")
         lines.append("- Top 5 types by size: \(topTypesSummary(from: findings))")

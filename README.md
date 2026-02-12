@@ -7,7 +7,7 @@
 ![CI](https://github.com/710csm/Reli/actions/workflows/reli.yml/badge.svg)
 ![Stars](https://img.shields.io/github/stars/710csm/Reli?style=social)
 
-**AI-powered Swift refactoring linter for iOS projects.**
+**AI-powered Swift refactoring linter with SwiftSyntax-based structural analysis and CI integration.**
 
 Reli scans your Swift codebase, detects architectural and structural code smells, and optionally generates AI-driven refactoring guidance in a clean Markdown report.
 
@@ -18,6 +18,10 @@ Built for local development and CI environments.
 ## ✨ Features
 
 - 🔍 Recursively scans Swift files in a project
+- 🧠 SwiftSyntax-based type analysis (class / struct / enum)
+- 🎯 AI analysis limited via `--ai-limit` for predictable performance
+- 🚦 CI-friendly modes (`--fail-on`, GitHub annotations)
+- 🧪 Excludes Tests/Samples by default (opt-in available)
 - 📊 Detects structural issues (God Type, DI Smell, Async Lifecycle risks)
 - 📝 Generates Markdown or JSON reports
 - 🤖 Optional AI-powered refactoring recommendations
@@ -84,7 +88,7 @@ reli --path /path/to/project --out report.md --model gpt-4o-mini
 ## Usage
 
 ```
-reli [--path <path>] [--no-ai] [--rules <rules>] [--format <format>] [--out <out>] [--model <model>]
+reli [--path <path>] [--no-ai] [--rules <rules>] [--format <format>] [--out <out>] [--model <model>] [--ai-limit <ai-limit>] [--fail-on <severity>] [--annotations github]
 ```
 
 ### Options
@@ -97,6 +101,9 @@ reli [--path <path>] [--no-ai] [--rules <rules>] [--format <format>] [--out <out
 | `--format` | `markdown` or `json` (default: `markdown`) |
 | `--out` | Output file path |
 | `--model` | AI model (e.g. `gpt-4o-mini`, `gpt-4.1-mini`) |
+| `--ai-limit` | Maximum number of findings sent to AI (default: `5`) |
+| `--fail-on` | Exit with code 1 if findings meet or exceed severity (`off`, `low`, `medium`, `high`) |
+| `--annotations github` | Emit GitHub Actions workflow annotations (`::warning`, `::error`) |
 
 ---
 
@@ -111,7 +118,7 @@ Detects excessive `.shared` singleton usage and direct instantiations. Encourage
 ### `async-lifecycle`
 Detects async patterns (`Task`, `Timer`, `asyncAfter`) without proper lifecycle handling. Encourages cancellation and safe lifecycle management.
 
-> v0.1 uses heuristic-based analysis. Future versions may adopt SwiftSyntax-based structural parsing.
+> Reli now uses SwiftSyntax-based structural analysis for improved accuracy and reduced false positives.
 
 ---
 
@@ -126,6 +133,13 @@ Detects async patterns (`Task`, `Timer`, `asyncAfter`) without proper lifecycle 
   - Refactoring steps
   - Risk assessment
   - Verification checklist
+
+### Summary Insights
+
+The report includes ranked insights such as:
+- Top files by number of findings
+- Top types by size (line count)
+- Severity distribution overview
 
 ---
 
@@ -178,11 +192,26 @@ With AI enabled:
 
 ## Roadmap
 
-- SwiftSyntax-based structural analysis
 - More advanced architectural rules
 - GitHub PR annotations
 - Multi-provider AI support (local LLM, Azure, etc.)
 - CI fail-on-severity options
+
+---
+
+## Performance & AI Usage
+
+By default, Reli limits AI analysis to the top 5 findings using `--ai-limit` to ensure fast execution and predictable API usage.
+
+You can adjust this behavior:
+
+```bash
+reli --path . --ai-limit 3
+```
+
+Set `--ai-limit 0` to disable AI calls without using `--no-ai`.
+
+This design ensures that large projects remain responsive while still providing high-impact AI insights.
 
 ---
 
