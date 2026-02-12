@@ -111,6 +111,8 @@ public struct MarkdownReporter {
         if let aiStatus, !aiStatus.isEmpty {
             lines.append("- AI: \(aiStatus)")
         }
+        lines.append("- Top 5 files by findings: \(topFilesSummary(from: findings))")
+        lines.append("- Top 5 types by size: \(topTypesSummary(from: findings))")
         return lines
     }
 
@@ -122,5 +124,42 @@ public struct MarkdownReporter {
             .filter { !$0.value.isEmpty }
             .sorted { $0.key < $1.key }
             .map { "  - \($0.key): \($0.value)" }
+    }
+
+    private func topFilesSummary(from findings: [Finding], limit: Int = 5) -> String {
+        let ranked = Dictionary(grouping: findings, by: \.filePath)
+            .map { (file: $0.key, count: $0.value.count) }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count { return lhs.file < rhs.file }
+                return lhs.count > rhs.count
+            }
+            .prefix(limit)
+
+        guard !ranked.isEmpty else { return "none" }
+        return ranked
+            .map { "\($0.file) (\($0.count))" }
+            .joined(separator: " | ")
+    }
+
+    private func topTypesSummary(from findings: [Finding], limit: Int = 5) -> String {
+        var largestByType: [String: Int] = [:]
+        for finding in findings {
+            guard let typeName = finding.typeName, !typeName.isEmpty else { continue }
+            guard let lineCountText = finding.evidence["lineCount"], let lineCount = Int(lineCountText) else { continue }
+            largestByType[typeName] = max(largestByType[typeName] ?? 0, lineCount)
+        }
+
+        let ranked = largestByType
+            .map { (type: $0.key, lineCount: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.lineCount == rhs.lineCount { return lhs.type < rhs.type }
+                return lhs.lineCount > rhs.lineCount
+            }
+            .prefix(limit)
+
+        guard !ranked.isEmpty else { return "none" }
+        return ranked
+            .map { "\($0.type) (\($0.lineCount)L)" }
+            .joined(separator: " | ")
     }
 }
