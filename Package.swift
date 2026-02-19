@@ -66,7 +66,10 @@ let package = Package(
         // depend on the core library. You can expand this with rule tests.
         .testTarget(
             name: "ReliTests",
-            dependencies: ["ReliCore"]
+            dependencies: [
+                "ReliCore",
+                "reli"
+            ]
         ),
     ]
 )
