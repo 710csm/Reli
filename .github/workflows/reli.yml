@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - 0.4.0
   pull_request:
     branches:
       - main
@@ -17,6 +17,6 @@ jobs:
       
       - name: Build & Run Reli
         run: |
-          brew tap 710csm/tap
-          brew install reli
-          reli --help
+          swift --version
+          swift build -c release
+          ./.build/release/reli --help
