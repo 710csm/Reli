@@ -1,0 +1,13 @@
+aiLimit: 5
+failOn: high
+annotations: github
+format: markdown
+out: reli-report.md
+includeExtensions: false
+includeTests: false
+includeSamples: false
+excludePaths:
+  - "**/*Tests*/**"
+  - "**/*Sample*/**"
+  - "**/Examples/**"
+rules: all

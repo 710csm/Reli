@@ -3,7 +3,7 @@ import ReliCore
 import ArgumentParser
 
 /// Controls CI failure behavior based on finding severity.
-enum FailOn: String, ExpressibleByArgument {
+enum FailOn: String, Codable, ExpressibleByArgument {
     case off
     case low
     case medium
@@ -25,13 +25,13 @@ enum FailOn: String, ExpressibleByArgument {
 }
 
 /// Controls whether CI annotations are emitted.
-enum AnnotationsMode: String, ExpressibleByArgument {
+enum AnnotationsMode: String, Codable, ExpressibleByArgument {
     case off
     case github
 }
 
 /// Controls how file paths are rendered in reports.
-enum PathStyle: String, ExpressibleByArgument {
+enum PathStyle: String, Codable, ExpressibleByArgument {
     case relative
     case absolute
 }

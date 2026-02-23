@@ -1,6 +1,6 @@
 # Reli
 
-![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)
+![Swift](https://img.shields.io/badge/Swift-6.1+-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Release](https://img.shields.io/github/v/release/710csm/Reli)
@@ -33,7 +33,7 @@ Built for local development and CI environments.
 ## Requirements
 
 - macOS 10.15+
-- Swift 5.9+
+- Swift 6.1+
 - (Optional) OpenAI API key for AI recommendations
 
 ---
@@ -88,13 +88,15 @@ reli --path /path/to/project --out report.md --model gpt-4o-mini
 ## Usage
 
 ```
-reli [--path <path>] [--no-ai] [--rules <rules>] [--format <format>] [--out <out>] [--model <model>] [--ai-limit <ai-limit>] [--fail-on <severity>] [--annotations github]
+reli [--config <path>] [--print-config] [--path <path>] [--no-ai] [--rules <rules>] [--format <format>] [--out <out>] [--model <model>] [--ai-limit <ai-limit>] [--fail-on <severity>] [--annotations github]
 ```
 
 ### Options
 
 | Option | Description |
 |--------|------------|
+| `--config` | Load options from a YAML config file |
+| `--print-config` | Print the final merged config (CLI > config > defaults) as JSON |
 | `--path` | Project root directory (default: current directory) |
 | `--no-ai` | Disable AI recommendations |
 | `--rules` | Comma-separated rule IDs to run |
@@ -104,6 +106,58 @@ reli [--path <path>] [--no-ai] [--rules <rules>] [--format <format>] [--out <out
 | `--ai-limit` | Maximum number of findings sent to AI (default: `5`) |
 | `--fail-on` | Exit with code 1 if findings meet or exceed severity (`off`, `low`, `medium`, `high`) |
 | `--annotations github` | Emit GitHub Actions workflow annotations (`::warning`, `::error`) |
+
+---
+
+## Config File (`.reli.yml`)
+
+Reli can load defaults from a YAML config file.
+
+Resolution order:
+1. `--config <path>` (required to exist)
+2. `./.reli.yml` (auto-discovered from current working directory)
+3. no config (existing CLI defaults apply)
+
+Precedence:
+- CLI options override config values
+- config values override built-in defaults
+
+Supported keys:
+- `path`
+- `noAI`
+- `aiLimit`
+- `model`
+- `failOn` (`off|low|medium|high`)
+- `annotations` (`off|github`)
+- `format` (`markdown|json`)
+- `out`
+- `rules` (`all` or string array)
+- `includeExtensions`
+- `includeTests`
+- `includeSamples`
+- `excludePaths` (glob array)
+- `maxFindings`
+- `pathStyle` (`relative|absolute`)
+
+Example:
+
+```yaml
+aiLimit: 5
+failOn: high
+annotations: github
+format: markdown
+out: reli-report.md
+includeExtensions: false
+includeTests: false
+includeSamples: false
+excludePaths:
+  - "**/*Tests*/**"
+  - "**/*Sample*/**"
+  - "**/Examples/**"
+rules: all
+```
+
+`reli.yml.example` is included in the repository root.
 
 ---
 
@@ -193,9 +247,7 @@ With AI enabled:
 ## Roadmap
 
 - More advanced architectural rules
-- GitHub PR annotations
 - Multi-provider AI support (local LLM, Azure, etc.)
-- CI fail-on-severity options
 
 ---
 

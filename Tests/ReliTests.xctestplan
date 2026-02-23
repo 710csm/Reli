@@ -1,0 +1,24 @@
+{
+  "configurations" : [
+    {
+      "id" : "80BF9D88-58D6-441D-ACF5-E67EC0172622",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "ReliTests",
+        "name" : "ReliTests"
+      }
+    }
+  ],
+  "version" : 1
+}
