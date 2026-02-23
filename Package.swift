@@ -31,7 +31,9 @@ let package = Package(
         // this version if a newer release of ArgumentParser is preferred.
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.3"),
         // SwiftSyntax-based parsing for AST-backed type/function analysis.
-        .package(url: "https://github.com/apple/swift-syntax.git", from: "601.0.1")
+        .package(url: "https://github.com/apple/swift-syntax.git", from: "601.0.1"),
+        // YAML parsing for .reli.yml configuration support.
+        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.3")
     ],
     targets: [
         // Core library target. No external dependencies beyond the standard
@@ -59,7 +61,8 @@ let package = Package(
             dependencies: [
                 "ReliCore",
                 "ReliRules",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "Yams", package: "Yams")
             ]
         ),
         // Example test target showing how you might write uㅌ4nit tests. Tests

@@ -12,10 +12,16 @@ struct ReliCommand: AsyncParsableCommand {
     )
 
     @Option(name: .shortAndLong, help: "Root path of the Swift package to lint.")
-    var path: String = FileManager.default.currentDirectoryPath
+    var path: String?
 
     @Flag(name: .long, help: "Disable AI explanations and emit only raw findings.")
     var noAI: Bool = false
+
+    @Option(name: .long, help: "Path to a YAML config file.")
+    var config: String?
+
+    @Flag(name: .customLong("print-config"), help: "Print the final merged config and exit.")
+    var printConfig: Bool = false
 
     @Option(name: .long, help: "Comma separated list of rule identifiers to enable (default: all).")
     var rules: String?
@@ -30,16 +36,16 @@ struct ReliCommand: AsyncParsableCommand {
     var excludePaths: String?
 
     @Option(name: .long, help: "Output format: markdown or json.")
-    var format: String = "markdown"
+    var format: String?
 
     @Option(name: .long, help: "Write output to the specified file instead of stdout.")
     var out: String?
 
     @Option(name: .long, help: "Specify an OpenAI model (e.g. gpt-4o-mini, gpt-4.1-mini).")
-    var model: String = "gpt-4o-mini"
+    var model: String?
 
     @Option(name: .long, help: "Maximum number of findings to send to AI for explanations.")
-    var aiLimit: Int = 5
+    var aiLimit: Int?
 
     @Option(
         name: .customLong("di-singleton-allowlist"),
@@ -51,19 +57,19 @@ struct ReliCommand: AsyncParsableCommand {
         name: .customLong("fail-on"),
         help: "Exit with code 1 if findings are at or above the given severity (off|low|medium|high)."
     )
-    var failOn: FailOn = .off
+    var failOn: FailOn?
 
     @Option(
         name: .customLong("annotations"),
         help: "Emit CI annotations (off|github)."
     )
-    var annotations: AnnotationsMode = .off
+    var annotations: AnnotationsMode?
 
     @Option(
         name: .customLong("include-extensions"),
         help: "Include same-file extensions in type-level analysis (true|false)."
     )
-    var includeExtensions: Bool = false
+    var includeExtensions: Bool?
 
     @Flag(name: .customLong("include-tests"), help: "Include test paths in analysis output.")
     var includeTests: Bool = false
@@ -81,68 +87,69 @@ struct ReliCommand: AsyncParsableCommand {
         name: .customLong("path-style"),
         help: "Render file paths as absolute or repo-relative (absolute|relative)."
     )
-    var pathStyle: PathStyle = .relative
+    var pathStyle: PathStyle?
 
     /// Executes lint analysis, emits report output, then applies CI-oriented
     /// behaviors such as annotations and fail-on thresholds.
     func run() async throws {
-        if let maxFindings, maxFindings < 1 {
+        let options = try resolveEffectiveOptions()
+
+        if printConfig {
+            try printEffectiveConfig(options)
+            return
+        }
+
+        if let maxFindings = options.maxFindings, maxFindings < 1 {
             throw ValidationError("--max-findings must be a positive integer.")
         }
-        if aiLimit < 0 {
+        if options.aiLimit < 0 {
             throw ValidationError("--ai-limit must be zero or a positive integer.")
         }
 
         // Normalize the root path so report paths + annotations are stable.
-        let rootURL = URL(fileURLWithPath: path).standardizedFileURL
+        let rootURL = URL(fileURLWithPath: options.path).standardizedFileURL
         let rootPath = rootURL.path
         let ignoredRuleIDs = parseCSVSet(ignoreRules)
-        var excludedPathPatterns = defaultExcludedPathPatterns(
-            includeTests: includeTests,
-            includeSamples: includeSamples
-        )
-        excludedPathPatterns.append(contentsOf: parseCSVList(ignorePaths))
-        excludedPathPatterns.append(contentsOf: parseCSVList(excludePaths))
         let singletonAllowlist = parseCSVSet(diSingletonAllowlist)
 
         // Discover Swift files and build the lint context.
         let walker = FileWalker()
         let context: LintContext
         do {
-            context = try walker.walk(root: rootPath)
+            context = try walker.walk(root: rootPath, excludedPathPatterns: options.excludePaths)
         } catch {
             throw ValidationError("Failed to walk directory: \(error.localizedDescription)")
         }
         // Build rule list.
         var selectedRules: [Rule] = []
         let allRules: [Rule] = [
-            GodTypeRule(includeExtensions: includeExtensions),
+            GodTypeRule(includeExtensions: options.includeExtensions),
             DependencyInjectionSmellRule(singletonAllowlist: singletonAllowlist),
             AsyncLifecycleRule()
         ]
-        if let rulesCSV = rules {
-            let ids = Set(rulesCSV.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        switch options.rules {
+        case .all:
+            selectedRules = allRules
+        case .list(let configuredRuleIDs):
+            let ids = Set(configuredRuleIDs)
             selectedRules = allRules.filter { ids.contains($0.id) }
             if selectedRules.isEmpty {
-                throw ValidationError("No matching rules for --rules=\(rulesCSV). Available: \(allRules.map(\.id).joined(separator: ", "))")
+                throw ValidationError("No matching rules for configured rules (\(configuredRuleIDs.joined(separator: ","))). Available: \(allRules.map(\.id).joined(separator: ", "))")
             }
-        } else {
-            selectedRules = allRules
         }
         if !ignoredRuleIDs.isEmpty {
             selectedRules.removeAll { ignoredRuleIDs.contains($0.id) }
         }
         // Run linter.
         let linter = Linter(rules: selectedRules)
-        let rawFindings = try linter.run(context: context)
-        let findings = applyExcludePaths(to: rawFindings, rootPath: rootPath, patterns: excludedPathPatterns)
+        let findings = try linter.run(context: context)
         let prioritizedFindings = prioritize(findings)
-        let cappedFindings = applyMaxFindings(to: prioritizedFindings)
-        let reportFindings = applyPathStyle(to: cappedFindings, rootPath: rootPath)
+        let cappedFindings = applyMaxFindings(to: prioritizedFindings, maxFindings: options.maxFindings)
+        let reportFindings = applyPathStyle(to: cappedFindings, rootPath: rootPath, pathStyle: options.pathStyle)
         let omittedFindingsCount = max(0, prioritizedFindings.count - reportFindings.count)
         // Build report output (JSON or Markdown with optional AI augmentation).
         var output: String
-        switch format.lowercased() {
+        switch options.format.lowercased() {
         case "json":
             let reporter = JSONReporter()
             output = try reporter.report(findings: reportFindings)
@@ -152,10 +159,10 @@ struct ReliCommand: AsyncParsableCommand {
             var inlineAI: [Int: String] = [:]
             var aiStatus: String?
             var aiPlannedCalls: Int? = 0
-            if noAI {
+            if options.noAI {
                 aiStatus = "disabled (--no-ai)"
             } else {
-                aiPlannedCalls = min(aiLimit, reportFindings.count)
+                aiPlannedCalls = min(options.aiLimit, reportFindings.count)
                 let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if apiKey.isEmpty {
@@ -163,11 +170,11 @@ struct ReliCommand: AsyncParsableCommand {
                     aiPlannedCalls = 0
                 } else {
                     // Build iOS-focused prompts per finding and render responses inline.
-                    let provider = OpenAIProvider(apiKey: apiKey, model: model)
+                    let provider = OpenAIProvider(apiKey: apiKey, model: options.model)
                     let projectName = rootURL.lastPathComponent
                     let aiIndices = AILimitSelector.selectedIndices(
                         totalFindings: reportFindings.count,
-                        limit: aiLimit
+                        limit: options.aiLimit
                     )
                     aiPlannedCalls = aiIndices.count
                     for (position, index) in aiIndices.enumerated() {
@@ -198,7 +205,7 @@ struct ReliCommand: AsyncParsableCommand {
                 inlineAI: inlineAI,
                 totalFindings: prioritizedFindings.count,
                 aiStatus: aiStatus,
-                aiCallLimit: aiLimit,
+                aiCallLimit: options.aiLimit,
                 aiPlannedCalls: aiPlannedCalls
             )
             if omittedFindingsCount > 0 {
@@ -206,19 +213,19 @@ struct ReliCommand: AsyncParsableCommand {
             }
         }
         // Write or print output.
-        if let outFile = out {
+        if let outFile = options.out {
             let url = URL(fileURLWithPath: outFile)
             try output.write(to: url, atomically: true, encoding: .utf8)
         } else {
             print(output)
         }
 
-        if annotations == .github {
-            GitHubAnnotationsEmitter(projectRoot: rootPath, normalizeRelativePaths: pathStyle == .relative)
+        if options.annotations == .github {
+            GitHubAnnotationsEmitter(projectRoot: rootPath, normalizeRelativePaths: options.pathStyle == .relative)
                 .emit(findings: reportFindings)
         }
 
-        if let threshold = failOn.threshold {
+        if let threshold = options.failOn.threshold {
             let shouldFail = findings.contains { $0.severity >= threshold }
             if shouldFail {
                 throw ExitCode.failure
