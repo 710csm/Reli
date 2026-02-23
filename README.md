@@ -1,6 +1,6 @@
 # Reli
 
-![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)
+![Swift](https://img.shields.io/badge/Swift-6.1+-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Release](https://img.shields.io/github/v/release/710csm/Reli)
@@ -33,7 +33,7 @@ Built for local development and CI environments.
 ## Requirements
 
 - macOS 10.15+
-- Swift 5.9+
+- Swift 6.1+
 - (Optional) OpenAI API key for AI recommendations
 
 ---
@@ -247,9 +247,7 @@ With AI enabled:
 ## Roadmap
 
 - More advanced architectural rules
-- GitHub PR annotations
 - Multi-provider AI support (local LLM, Azure, etc.)
-- CI fail-on-severity options
 
 ---
 
